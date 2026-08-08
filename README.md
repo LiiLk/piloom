@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/LiiLk/piloom">
-    <img alt="PiLoom" src="assets/piloom-mark.svg" width="144" style="max-width: 100%;">
+    <img alt="PiLoom" src="assets/piloom-logo.svg" width="420" style="max-width: 100%;">
   </a>
 </p>
 
