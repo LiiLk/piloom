@@ -904,7 +904,12 @@ describe("self-update daemon restart", () => {
 			expect(releaseAdmissionIndex).toBeGreaterThan(startupFenceIndex);
 			expect(ensureIndex).toBeGreaterThan(releaseAdmissionIndex);
 			expect(ensureIndex).toBeGreaterThan(shutdownIndex);
-			expect(statSync(join(agentDir, "update-restarts", "test-status.json")).mode & 0o777).toBe(0o600);
+			const statusFile = statSync(join(agentDir, "update-restarts", "test-status.json"));
+			expect(statusFile.isFile()).toBe(true);
+			if (process.platform !== "win32") {
+				// Windows reports ACL-backed files with synthetic POSIX mode bits.
+				expect(statusFile.mode & 0o777).toBe(0o600);
+			}
 		} finally {
 			errorSpy.mockRestore();
 			logSpy.mockRestore();

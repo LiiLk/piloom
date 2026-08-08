@@ -312,15 +312,18 @@ describe("owned session worker processes", () => {
 		frontendPids.add(frontendPid);
 		expect(Number(readFileSync(`${pidPath}.ppid`, "utf8").trim())).toBe(frontendPid);
 
-		process.kill(frontendPid, "SIGKILL");
+		frontend.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
 		await waitForExit(frontend);
 		children.delete(frontend);
 		frontendPids.delete(frontendPid);
-		const terminationDeadline = Date.now() + 5000;
-		while (!existsSync(`${pidPath}.terminated`) && Date.now() < terminationDeadline) {
-			await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+		if (process.platform !== "win32") {
+			// Windows force-termination does not deliver SIGTERM to the fixture's marker handler.
+			const terminationDeadline = Date.now() + 5000;
+			while (!existsSync(`${pidPath}.terminated`) && Date.now() < terminationDeadline) {
+				await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+			}
+			expect(existsSync(`${pidPath}.terminated`)).toBe(true);
 		}
-		expect(existsSync(`${pidPath}.terminated`)).toBe(true);
 		await waitForProcessGone(workerPid);
 	});
 });
