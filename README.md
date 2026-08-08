@@ -9,7 +9,7 @@
 </p>
 
 <h3 align="center">
-Prime Agent Windows: a Windows-first coding and research agent
+PiLoom: a persistent recursive coding and research agent
 </h3>
 
 <p align="center">
@@ -19,22 +19,22 @@ Prime Agent Windows: a Windows-first coding and research agent
 </p>
 
 <p align="center">
-  <a href="https://github.com/LiiLk/prime-agent-windows/actions/workflows/ci.yml">
-    <img src="https://github.com/LiiLk/prime-agent-windows/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  <a href="https://github.com/LiiLk/piloom/actions/workflows/ci.yml">
+    <img src="https://github.com/LiiLk/piloom/actions/workflows/ci.yml/badge.svg" alt="CI" />
   </a>
-  <a href="https://github.com/LiiLk/prime-agent-windows/actions/workflows/build-binaries.yml">
-    <img src="https://github.com/LiiLk/prime-agent-windows/actions/workflows/build-binaries.yml/badge.svg" alt="Build Binaries" />
+  <a href="https://github.com/LiiLk/piloom/actions/workflows/build-binaries.yml">
+    <img src="https://github.com/LiiLk/piloom/actions/workflows/build-binaries.yml/badge.svg" alt="Build Binaries" />
   </a>
 </p>
 
-Prime Agent Windows is a Windows-first fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent), an open-source coding and research agent for general and long-running work. The fork preserves Prime Agent's architecture while preparing its daemon, workers, sessions, RPC interfaces, and development workflows for Windows.
+PiLoom is an independent cross-platform fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) with a Windows-first development focus. It preserves Prime Agent's architecture while preparing its daemon, workers, sessions, RPC interfaces, and development workflows for Windows and other platforms.
 
 The project is based on two core abstractions:
 
 - The **[Recursive Language Model (RLM)](https://www.primeintellect.ai/blog/rlm)** treats context as variables (*prompt-as-a-variable*) and tools like recursive subagents as function calls (*programmatic tool / sub-agent calling*) inside a persistent REPL.
-- The **[Continual Harness](https://arxiv.org/abs/2605.09998)** stores supplemental prompts, memories, skill descriptions, and reusable subagent specifications as durable state that Prime Agent can refine through small, evidence-backed updates, local to the session by default.
+- The **[Continual Harness](https://arxiv.org/abs/2605.09998)** stores supplemental prompts, memories, skill descriptions, and reusable subagent specifications as durable state that PiLoom can refine through small, evidence-backed updates, local to the session by default.
 
-Prime Agent Windows combines a persistent Python control environment with durable harness state, so useful working context and reusable operating patterns can outlive a single chat window.
+PiLoom combines a persistent Python control environment with durable harness state, so useful working context and reusable operating patterns can outlive a single chat window.
 
 - **Everything is programmatic:** persistent IPython is the built-in model tool; file operations, shell commands, tool use, subagents, and context management happen through code.
 - **Subagents are built in:** `rlm(...)` spawns real child agents for parallel or background work and returns their results programmatically.
@@ -46,7 +46,7 @@ Prime Agent Windows combines a persistent Python control environment with durabl
 
 ## Project status
 
-This fork is at the foundation stage of its Windows-first work. The upstream behavior and architecture are being retained while platform compatibility is addressed incrementally. The current roadmap includes Windows-safe directory synchronization, Python virtual-environment discovery, a native `uv` installation path, Windows CI and release jobs, and Windows daemon/lifecycle coverage.
+PiLoom is at the foundation stage of its cross-platform work, with Windows as its first platform target. The upstream behavior and architecture are being retained while platform compatibility is addressed incrementally. The current roadmap includes Windows-safe directory synchronization, Python virtual-environment discovery, a native `uv` installation path, Windows CI and release jobs, and Windows daemon/lifecycle coverage.
 
 Until that work is complete, the existing Unix installer and some development paths remain upstream-oriented. Check the project issues and development documentation before relying on this fork for production Windows use.
 
@@ -54,26 +54,28 @@ Until that work is complete, the existing Unix installer and some development pa
 
 ### From source
 
-Clone the repository and follow the development documentation:
+Clone PiLoom and follow the development documentation:
 
 ```bash
-git clone https://github.com/LiiLk/prime-agent-windows.git
-cd prime-agent-windows
+git clone https://github.com/LiiLk/piloom.git
+cd piloom
 ```
 
 See the [development guide](packages/coding-agent/docs/development.md) for the source workflow and the [quickstart](packages/coding-agent/docs/quickstart.md) for authentication and first-run instructions. The [provider setup guide](packages/coding-agent/docs/providers.md) covers subscription and API-key providers.
 
-Start Prime Agent from the repository or directory it should work in:
+Start the agent from the repository or directory it should work in:
 
 ```bash
 cd /path/to/project
 prime-agent
 ```
 
-On first launch, run `/login` to choose a subscription or API-key provider. Prime Agent works in the current directory and can run commands and modify files there. Use a disposable clone, clean worktree, or another checkpoint you can inspect and restore.
+On first launch, run `/login` to choose a subscription or API-key provider. PiLoom works in the current directory and can run commands and modify files there. Use a disposable clone, clean worktree, or another checkpoint you can inspect and restore.
+
+The current CLI executable remains `prime-agent`; the repository and project identity are PiLoom.
 
 > [!WARNING]
-> Prime Agent executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not a security sandbox**. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
+> PiLoom executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not a security sandbox**. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
 
 Useful commands:
 
@@ -89,7 +91,7 @@ prime-agent shutdown [--force]        # Stop every agent, worker, and background
 
 ## Built for Long-Running Work
 
-Prime Agent Windows is designed for long-running work, especially for evaluations in research. These features are available in the TUI and autonomous mode:
+PiLoom is designed for long-running work, especially for evaluations in research. These features are available in the TUI and autonomous mode:
 
 - **Continual Harness:** `/refine` can persist focused, reviewable lessons as supplemental prompts, memories, reusable skill descriptions, or subagent specifications, with recorded refinement history. It does not replace packaging and reviewing new executable skills.
 - **Direct agent-to-agent communication:** running agents and retained subagents can discover one another, exchange messages, and steer active work.
@@ -112,10 +114,10 @@ Prime Agent Windows is designed for long-running work, especially for evaluation
 
 ## Attribution
 
-Prime Agent Windows is an independent fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by [Prime Intellect](https://github.com/PrimeIntellect-ai). Prime Agent is built on top of [`pi`](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/badlogic).
+PiLoom is an independent fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by [Prime Intellect](https://github.com/PrimeIntellect-ai). Prime Agent is built on top of [`pi`](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/badlogic).
 
 This fork preserves the upstream attribution and MIT license. See [LICENSE](LICENSE) for the complete license text.
 
 ## License
 
-Prime Agent Windows is released under the [MIT License](LICENSE).
+PiLoom is released under the [MIT License](LICENSE).
