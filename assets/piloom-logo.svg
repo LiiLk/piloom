@@ -1,57 +1,51 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 180" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 180" role="img" aria-labelledby="title">
   <title id="title">PiLoom</title>
   <defs>
-    <linearGradient id="ribbon" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="ribbonGrad" x1="10%" y1="0%" x2="90%" y2="100%">
       <stop offset="0%" stop-color="#5EEAD4"/>
-      <stop offset="35%" stop-color="#2DD4BF"/>
-      <stop offset="70%" stop-color="#14B8A6"/>
+      <stop offset="40%" stop-color="#2DD4BF"/>
       <stop offset="100%" stop-color="#0D9488"/>
     </linearGradient>
-    <linearGradient id="ribbonDark" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#0F766E"/>
-      <stop offset="100%" stop-color="#134E4A"/>
-    </linearGradient>
-    <linearGradient id="text" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#2DD4BF"/>
-      <stop offset="45%" stop-color="#99F6E4"/>
+      <stop offset="50%" stop-color="#99F6E4"/>
       <stop offset="100%" stop-color="#CBD5E1"/>
     </linearGradient>
-    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0D9488" flood-opacity="0.35"/>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0D9488" flood-opacity="0.4"/>
     </filter>
   </defs>
 
-  <!-- Premium flowing ribbon P -->
-  <g transform="translate(28, 22)" filter="url(#softShadow)">
-    <!-- Main body -->
-    <path fill="url(#ribbon)" d="
-      M 42 12
-      C 78 -2, 118 8, 128 48
-      C 136 78, 122 108, 88 118
-      L 68 122
-      L 68 148
-      C 68 156, 60 162, 52 162
-      C 44 162, 36 156, 36 148
-      L 36 58
-      C 36 32, 40 18, 42 12
+  <!-- Elegant flowing ribbon P (Version A) -->
+  <g transform="translate(30, 18)" filter="url(#shadow)">
+    <path fill="url(#ribbonGrad)" d="
+      M 38 18
+      C 72 0, 115 12, 128 52
+      C 138 82, 128 112, 92 122
+      L 70 126
+      L 70 152
+      C 70 160, 62 166, 54 166
+      C 46 166, 38 160, 38 152
+      L 38 62
+      C 38 36, 40 24, 38 18
       Z
     "/>
-    <!-- Inner hole for depth -->
+    <!-- Inner depth cut -->
     <path fill="#0B1220" d="
-      M 64 52
-      C 86 44, 108 52, 112 76
-      C 116 96, 102 110, 80 114
-      L 64 114
+      M 62 54
+      C 88 44, 112 54, 116 80
+      C 120 100, 106 116, 82 120
+      L 62 120
       Z
     "/>
-    <!-- Highlight edge -->
-    <path fill="none" stroke="#99F6E4" stroke-width="3.2" stroke-linecap="round" opacity="0.55"
-      d="M 48 22 C 82 6, 115 20, 122 55 C 128 82, 116 105, 90 112"/>
+    <!-- Soft highlight -->
+    <path fill="none" stroke="#99F6E4" stroke-width="3.5" stroke-linecap="round" opacity="0.5"
+      d="M 48 28 C 85 8, 118 22, 126 58 C 132 88, 120 110, 95 118"/>
   </g>
 
   <!-- Wordmark -->
-  <text x="185" y="108" 
-        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
-        font-size="68" font-weight="600" letter-spacing="-2.2" 
-        fill="url(#text)">PiLoom</text>
+  <text x="190" y="110"
+        font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="70" font-weight="600" letter-spacing="-2.4"
+        fill="url(#textGrad)">PiLoom</text>
 </svg>
