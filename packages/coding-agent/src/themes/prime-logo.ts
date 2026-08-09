@@ -1,18 +1,11 @@
-/**
- * Pre-rendered ASCII versions of the Prime butterfly mark.
- *
- * Source: assets/brand/prime-butterfly.svg
- * Re-render at any width: `uv run scripts/render-logo.py --width N`
- */
+/** Compact terminal rendering of the PiLoom ribbon mark. */
+export const PILOOM_LOGO = `██████▄
+██   ▀██
+██    ██
+██████▀
+██
+██
+██`;
 
-/** ~10 rows × 32 cols. The default brand mark — half-block butterfly, splash-ready. */
-export const PRIME_BUTTERFLY_LOGO = `                          ▄▄███▀
-    ▄▄▄▄▄              ▄█████▀
-    ██████▄         ▄██████▀
-   ▄███▀███▄     ▄███▀▄██▀
-   ███ ▄████▄▄▄████▀▄▄██
-  ▀██  ▀█████████▀▀▀▀▀▀
-  ▄██   ██████▀▀ ▄███
- █████    ▀█▄▄▄█████▀
-███████▄  ████████▀
-▀███▀▀    █████▀`;
+/** Internal compatibility alias for older call sites. */
+export const PRIME_BUTTERFLY_LOGO = PILOOM_LOGO;

@@ -81,10 +81,10 @@ Configure delivery in [Settings](settings.md) with `steeringMode` and `followUpM
 Sessions are saved automatically as flat JSONL files under `~/.prime/agent/sessions/`. Each session header records its working directory, which the session picker uses for project-scoped views.
 
 ```bash
-prime-agent -c                  # Continue most recent session
-prime-agent -r [path|id]        # Browse sessions or resume one directly
-prime-agent --no-session        # Ephemeral mode; do not save
-prime-agent --fork <path|id>    # Fork a session into a new session file
+piloom -c                  # Continue most recent session
+piloom -r [path|id]        # Browse sessions or resume one directly
+piloom --no-session        # Ephemeral mode; do not save
+piloom --fork <path|id>    # Fork a session into a new session file
 ```
 
 Useful session commands:
@@ -100,7 +100,7 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 ## Agents and Recursive Subagents
 
-Normal interactive sessions are persistent agents backed by isolated worker processes. Closing the TUI detaches the client; use `prime-agent agents`, `prime-agent list`, or `prime-agent attach <agent>` to find and reattach to running work. `prime-agent stop <agent>` stops one root agent, while `prime-agent shutdown` stops all workers and the local supervisor.
+Normal interactive sessions are persistent agents backed by isolated worker processes. Closing the TUI detaches the client; use `piloom agents`, `piloom list`, or `piloom attach <agent>` to find and reattach to running work. `piloom stop <agent>` stops one root agent, while `piloom shutdown` stops all workers and the local supervisor.
 
 Within a session, the model can delegate through the `rlm` callable already available in IPython:
 
@@ -157,29 +157,29 @@ Use `/share` to upload a private GitHub gist with a shareable HTML link.
 ## CLI Reference
 
 ```bash
-prime-agent [options] [@files...] [messages...]
+piloom [options] [@files...] [messages...]
 ```
 
 ### Shell Commands
 
 ```bash
-prime-agent agents
-prime-agent list [--all]
-prime-agent attach <agent>
-prime-agent stop <agent>
-prime-agent rename <agent> <name>
-prime-agent send <agent> <message>
-prime-agent schedule <list|add|cancel>
-prime-agent status
-prime-agent doctor [--fix]
-prime-agent shutdown [--force]
+piloom agents
+piloom list [--all]
+piloom attach <agent>
+piloom stop <agent>
+piloom rename <agent> <name>
+piloom send <agent> <message>
+piloom schedule <list|add|cancel>
+piloom status
+piloom doctor [--fix]
+piloom shutdown [--force]
 
-prime-agent package install <source> [--local]
-prime-agent package remove <source> [--local]
-prime-agent package list
-prime-agent package update [source]
-prime-agent update [--force]
-prime-agent config
+piloom package install <source> [--local]
+piloom package remove <source> [--local]
+piloom package list
+piloom package update [source]
+piloom update [--force]
+piloom config
 ```
 
 See [Prime Agent Packages](packages.md) for package sources and security notes.
@@ -196,7 +196,7 @@ See [Prime Agent Packages](packages.md) for package sources and security notes.
 In print mode, Prime Agent also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | piloom -p "Summarize this text"
 ```
 
 ### Model Options
@@ -209,7 +209,7 @@ cat README.md | prime-agent -p "Summarize this text"
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 
-Use `prime-agent model list [search]` to list available models.
+Use `piloom model list [search]` to list available models.
 
 ### Session Options
 
@@ -221,7 +221,7 @@ Use `prime-agent model list [search]` to list available models.
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode; do not save |
 
-Use `prime-agent session export <file> [output]` to export a session to HTML.
+Use `piloom session export <file> [output]` to export a session to HTML.
 
 ### Tool Options
 
@@ -250,7 +250,7 @@ Built-in tools: `ipython`.
 Combine `--no-*` with explicit flags to load exactly what you need, ignoring settings. Example:
 
 ```bash
-prime-agent --no-extensions -e ./my-extension.ts
+piloom --no-extensions -e ./my-extension.ts
 ```
 
 ### Autonomous Options
@@ -275,7 +275,7 @@ After each assistant response, configured gates run before the ordinary continua
 For example, this noninteractive run uses a locally available model configuration, skips startup network operations, and bounds every autonomous budget while requiring the project check to pass:
 
 ```bash
-prime-agent -p \
+piloom -p \
   --autonomous \
   --autonomous-gate "npm run check" \
   --autonomous-gate-retries 2 \
@@ -312,37 +312,37 @@ Goals are separate from autonomous mode: `--goal <objective>` starts a persisten
 Prefix files with `@` to include them in the message:
 
 ```bash
-prime-agent @prompt.md "Answer this"
-prime-agent -p @screenshot.png "What's in this image?"
-prime-agent @code.ts @test.ts "Review these files"
+piloom @prompt.md "Answer this"
+piloom -p @screenshot.png "What's in this image?"
+piloom @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-prime-agent "List all .ts files in src/"
+piloom "List all .ts files in src/"
 
 # Non-interactive
-prime-agent -p "Summarize this codebase"
+piloom -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | piloom -p "Summarize this text"
 
 # Different model
-prime-agent --provider openai --model gpt-4o "Help me refactor"
+piloom --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix
-prime-agent --model openai/gpt-4o "Help me refactor"
+piloom --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-prime-agent --model sonnet:high "Solve this complex problem"
+piloom --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-prime-agent --models "claude-*,gpt-4o"
+piloom --models "claude-*,gpt-4o"
 
 # Restrict to the built-in IPython tool
-prime-agent --tools ipython -p "Review the code"
+piloom --tools ipython -p "Review the code"
 ```
 
 ### Environment Variables

@@ -14,7 +14,7 @@ Then run it in a project directory:
 
 ```bash
 cd /path/to/project
-prime-agent
+piloom
 ```
 
 Authenticate with `/login` for subscription or stored API-key providers, or set an environment variable such as `ANTHROPIC_API_KEY` before launch. See the [Quickstart](quickstart.md) for the complete first-run flow.

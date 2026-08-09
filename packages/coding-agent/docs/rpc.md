@@ -7,7 +7,7 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 ## Starting RPC Mode
 
 ```bash
-prime-agent --mode rpc [options]
+piloom --mode rpc [options]
 ```
 
 Common options:

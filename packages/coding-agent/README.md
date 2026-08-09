@@ -1,19 +1,16 @@
 <p align="center">
-  <a href="https://primeintellect.ai">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/prime-butterfly.svg">
-      <img alt="Prime Intellect butterfly mark" src="../../assets/brand/prime-butterfly-black.svg" width="96">
-    </picture>
+  <a href="https://github.com/LiiLk/piloom">
+    <img alt="PiLoom" src="https://raw.githubusercontent.com/LiiLk/piloom/main/assets/piloom-mark.png" width="144">
   </a>
 </p>
 
-<h1 align="center">Prime Agent CLI</h1>
+<h1 align="center">PiLoom CLI</h1>
 
 <p align="center">
   RLM-native terminal coding and research harness.
 </p>
 
-Prime Agent began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), but it is now developed and distributed independently. This workspace retains inherited `@earendil-works/pi-*` source package identifiers, the `pi` package manifest key, and a source-package `pi` bin entry for internal compatibility. Public releases are currently versioned tarball artifacts installed by the scripts below; release packaging rewrites the application package and command to `prime-agent`. Do not use the inherited npm package as the Prime Agent install path.
+PiLoom is a Windows-first fork of Prime Agent, which began as a hard fork of [pi-mono](https://github.com/badlogic/pi-mono). This workspace retains inherited `@earendil-works/pi-*` source package identifiers and the `pi` package manifest key for internal compatibility. Public releases install the `piloom` command; do not use the inherited npm package as the PiLoom install path.
 
 ## Table of Contents
 
@@ -56,17 +53,17 @@ Authenticate with an API key:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-prime-agent
+piloom
 ```
 
 Or use your existing subscription:
 
 ```bash
-prime-agent
+piloom
 /login  # Then select provider
 ```
 
-Then just talk to Prime Agent. By default, Prime Agent gives the model one tool: `ipython`. The model uses the persistent kernel to read files, run commands, edit code, and inspect data. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [Prime Agent packages](#prime-agent-packages).
+Then just talk to PiLoom. By default, PiLoom gives the model one tool: `ipython`. The model uses the persistent kernel to read files, run commands, edit code, and inspect data. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [Prime Agent packages](#prime-agent-packages).
 
 The Python kernel runtime is set up automatically on first invocation. Set `PRIME_AGENT_KERNEL_PYTHON` to use an existing Python environment with `ipykernel`.
 
@@ -74,7 +71,7 @@ The Python kernel runtime is set up automatically on first invocation. Set `PRIM
 
 ## Providers & Models
 
-For each built-in provider, Prime Agent maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
+For each built-in provider, PiLoom maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max
@@ -167,7 +164,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit` | Quit Prime Agent |
+| `/quit` | Quit PiLoom |
 
 ### Keyboard Shortcuts
 
@@ -196,7 +193,7 @@ Submit messages while the agent is working:
 - **Escape** clears the input without interrupting active work
 - **Alt+Up** retrieves queued messages back to editor
 
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so Prime Agent can receive the follow-up shortcut.
+On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so PiLoom can receive the follow-up shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -209,10 +206,10 @@ Sessions are stored as JSONL files with a tree structure. Each entry has an `id`
 Sessions auto-save as flat JSONL files under `~/.prime/agent/sessions/`. Each session header records its working directory, which the searchable session view uses to identify and open saved sessions.
 
 ```bash
-prime-agent -c                  # Continue most recent session
-prime-agent -r [path|id]        # Browse past sessions or resume one directly
-prime-agent --no-session        # Ephemeral mode (don't save)
-prime-agent --fork <path|id>    # Fork specific session file or ID into a new session
+piloom -c                  # Continue most recent session
+piloom -r [path|id]        # Browse past sessions or resume one directly
+piloom --no-session        # Ephemeral mode (don't save)
+piloom --fork <path|id>    # Fork specific session file or ID into a new session
 ```
 
 Use `/session` in interactive mode to see the current session ID before reusing it with `--resume <id>` or `--fork <id>`.
@@ -407,20 +404,20 @@ Bundle and share extensions, skills, prompts, and themes via npm or git.
 > **Security:** Prime Agent packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
 ```bash
-prime-agent package install npm:@foo/prime-agent-tools
-prime-agent package install npm:@foo/prime-agent-tools@1.2.3  # pinned version
-prime-agent package install git:github.com/user/repo
-prime-agent package install git:github.com/user/repo@v1       # tag or commit
-prime-agent package install git:git@github.com:user/repo
-prime-agent package install https://github.com/user/repo
-prime-agent package install ssh://git@github.com/user/repo
-prime-agent package remove npm:@foo/prime-agent-tools
-prime-agent package list
-prime-agent package update                                  # update packages, except pinned versions
-prime-agent package update npm:@foo/prime-agent-tools       # update one package
-prime-agent update                                          # update Prime Agent
-prime-agent update --force                                  # reinstall Prime Agent even if current
-prime-agent config                                          # enable/disable package resources
+piloom package install npm:@foo/prime-agent-tools
+piloom package install npm:@foo/prime-agent-tools@1.2.3  # pinned version
+piloom package install git:github.com/user/repo
+piloom package install git:github.com/user/repo@v1       # tag or commit
+piloom package install git:git@github.com:user/repo
+piloom package install https://github.com/user/repo
+piloom package install ssh://git@github.com/user/repo
+piloom package remove npm:@foo/prime-agent-tools
+piloom package list
+piloom package update                                  # update packages, except pinned versions
+piloom package update npm:@foo/prime-agent-tools       # update one package
+piloom update                                          # update PiLoom
+piloom update --force                                  # reinstall PiLoom even if current
+piloom config                                          # enable/disable package resources
 ```
 
 Packages install to `~/.prime/agent/git/` (git) or global npm. Use `--local` for project-local installs (`.prime/agent/git/`, `.prime/agent/npm/`). Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
@@ -471,7 +468,7 @@ See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
 For non-Node.js integrations, use RPC mode over stdin/stdout:
 
 ```bash
-prime-agent --mode rpc
+piloom --mode rpc
 ```
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
@@ -482,28 +479,28 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 Prime Agent is forked from [pi-mono](https://github.com/badlogic/pi-mono) by Mario Zechner and keeps MIT attribution in the root license.
 
-The package architecture, extension model, and source package names still reflect that upstream lineage while the distributed command and release artifacts are branded for Prime Agent.
+The package architecture, extension model, and source package names still reflect that upstream lineage while the distributed command and release artifacts are branded for PiLoom.
 
 ## CLI Reference
 
 ```bash
-prime-agent [options] [@files...] [messages...]
+piloom [options] [@files...] [messages...]
 ```
 
-Run `prime-agent help` for the command list and `prime-agent help <command>` for details.
+Run `piloom help` for the command list and `piloom help <command>` for details.
 
 ### Agent Commands
 
 ```bash
-prime-agent agents                         # Search running, idle, and inactive sessions
-prime-agent list [--all]                   # List active or saved agents
-prime-agent attach <agent>                 # Attach the interactive UI
-prime-agent stop <agent>                   # Stop one agent
-prime-agent rename <agent> <name>          # Rename an agent
-prime-agent send <agent> <message>         # Send an agent-to-agent message
-prime-agent status                         # Show background service status
-prime-agent doctor [--fix]                 # Inspect or safely clean up background services
-prime-agent shutdown [--force]             # Stop every agent, worker, and background service
+piloom agents                         # Search running, idle, and inactive sessions
+piloom list [--all]                   # List active or saved agents
+piloom attach <agent>                 # Attach the interactive UI
+piloom stop <agent>                   # Stop one agent
+piloom rename <agent> <name>          # Rename an agent
+piloom send <agent> <message>         # Send an agent-to-agent message
+piloom status                         # Show background service status
+piloom doctor [--fix]                 # Inspect or safely clean up background services
+piloom shutdown [--force]             # Stop every agent, worker, and background service
 ```
 
 `shutdown` asks for confirmation. `shutdown --force` skips confirmation and kills unresponsive workers and their tracked child processes.
@@ -511,9 +508,9 @@ prime-agent shutdown [--force]             # Stop every agent, worker, and backg
 ### Scheduled Prompts
 
 ```bash
-prime-agent schedule list [--all] [agent]
-prime-agent schedule add <agent> <schedule> -- <message>
-prime-agent schedule cancel <job-id>
+piloom schedule list [--all] [agent]
+piloom schedule add <agent> <schedule> -- <message>
+piloom schedule cancel <job-id>
 ```
 
 Schedules run prompts later or repeatedly. A schedule can be a supported one-time expression such as `in 5m` or a cron expression.
@@ -523,12 +520,12 @@ Schedules run prompts later or repeatedly. A schedule can be a supported one-tim
 Packages bundle capabilities such as extensions, skills, prompts, and themes.
 
 ```bash
-prime-agent package install <source> [--local]
-prime-agent package remove <source> [--local]
-prime-agent package list
-prime-agent package update [source]
-prime-agent update [--force]                   # Update Prime Agent itself
-prime-agent config                             # Enable/disable package resources
+piloom package install <source> [--local]
+piloom package remove <source> [--local]
+piloom package list
+piloom package update [source]
+piloom update [--force]                   # Update PiLoom itself
+piloom config                             # Enable/disable package resources
 ```
 
 ### Modes
@@ -543,7 +540,7 @@ prime-agent config                             # Enable/disable package resource
 In print mode, Prime Agent also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | piloom -p "Summarize this text"
 ```
 
 ### Model Options
@@ -556,7 +553,7 @@ cat README.md | prime-agent -p "Summarize this text"
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 
-Use `prime-agent model list [search]` to list available models.
+Use `piloom model list [search]` to list available models.
 
 ### Session Options
 
@@ -568,7 +565,7 @@ Use `prime-agent model list [search]` to list available models.
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode (don't save) |
 
-Use `prime-agent session export <file> [output]` to export a saved session to HTML.
+Use `piloom session export <file> [output]` to export a saved session to HTML.
 
 ### Tool Options
 
@@ -628,40 +625,40 @@ Gates run before the continuation, turn, token, and wall-clock limits are evalua
 Prefix files with `@` to include in the message:
 
 ```bash
-prime-agent @prompt.md "Answer this"
-prime-agent -p @screenshot.png "What's in this image?"
-prime-agent @code.ts @test.ts "Review these files"
+piloom @prompt.md "Answer this"
+piloom -p @screenshot.png "What's in this image?"
+piloom @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-prime-agent "List all .ts files in src/"
+piloom "List all .ts files in src/"
 
 # Non-interactive
-prime-agent -p "Summarize this codebase"
+piloom -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | prime-agent -p "Summarize this text"
+cat README.md | piloom -p "Summarize this text"
 
 # Different model
-prime-agent --provider openai --model gpt-4o "Help me refactor"
+piloom --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-prime-agent --model openai/gpt-4o "Help me refactor"
+piloom --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-prime-agent --model sonnet:high "Solve this complex problem"
+piloom --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-prime-agent --models "claude-*,gpt-4o"
+piloom --models "claude-*,gpt-4o"
 
 # Restrict to the built-in IPython tool
-prime-agent --tools ipython -p "Review the code"
+piloom --tools ipython -p "Review the code"
 
 # High thinking level
-prime-agent --thinking high "Solve this complex problem"
+piloom --thinking high "Solve this complex problem"
 ```
 
 ### Environment Variables

@@ -59,7 +59,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. Prime Agent waits for the factory before startup continues, so the provider is available during interactive startup and to `prime-agent model list`.
+The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. Prime Agent waits for the factory before startup continues, so the provider is available during interactive startup and to `piloom model list`.
 
 ## Override Existing Provider
 

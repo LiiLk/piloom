@@ -35,7 +35,7 @@ Prime Agent loads skills from:
 - Packages: `skills/` directories or `pi.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
-- Built-in: `skills/` shipped with the prime-agent package (lowest precedence)
+- Built-in: `skills/` shipped with the piloom package (lowest precedence)
 
 Discovery rules:
 - In `~/.prime/agent/skills/` and `.prime/agent/skills/`, direct root `.md` files are discovered as individual skills

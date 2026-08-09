@@ -25,17 +25,13 @@ function makeState(overrides: {
 		modelRegistry: {
 			refresh: () => {},
 			hasConfiguredAuth: () => overrides.modelHasAuth ?? false,
-			getProviderAuthStatus: () => ({
-				configured: overrides.primeAuthSource !== undefined,
-				source: overrides.primeAuthSource,
-			}),
 		},
 		model: overrides.model,
 	};
 }
 
 describe("startup onboarding decision", () => {
-	test("runs onboarding on first launch with Prime CLI auth", () => {
+	test("runs the branded model-selection onboarding on first launch with Prime CLI auth", () => {
 		const state = makeState({
 			onboardingShown: false,
 			model: makeModel(PRIME_INFERENCE_PROVIDER_ID),
@@ -71,14 +67,14 @@ describe("startup onboarding decision", () => {
 		expect(shouldRunOnboarding(state)).toBe(false);
 	});
 
-	test("skips the Prime CLI splash for non-Prime providers with ready auth", () => {
+	test("runs the branded onboarding once for non-Prime providers with ready auth", () => {
 		const state = makeState({
 			onboardingShown: false,
 			model: makeModel("anthropic"),
 			modelHasAuth: true,
 			primeAuthSource: "stored",
 		});
-		expect(shouldRunPrimeCliOnboardingSplash(state)).toBe(false);
-		expect(shouldRunOnboarding(state)).toBe(false);
+		expect(shouldRunPrimeCliOnboardingSplash(state)).toBe(true);
+		expect(shouldRunOnboarding(state)).toBe(true);
 	});
 });

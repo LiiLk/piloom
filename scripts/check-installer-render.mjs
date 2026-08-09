@@ -4,11 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const installerSource = readFileSync("install.sh", "utf-8");
+const powershellInstallerSource = readFileSync("install.ps1", "utf-8");
+const isWindows = process.platform === "win32";
 const mainCall = '\nmain "$@"';
 const mainCallIndex = installerSource.lastIndexOf(mainCall);
 const ansiPattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const syncEnd = "\x1b[?2026l";
 const failures = [];
+
+check(installerSource.includes('prime_agent_cmd="${PRIME_AGENT_CMD:-piloom}"'), "POSIX installer must expose piloom as the default command");
+checkPowerShellInstaller(powershellInstallerSource);
+
+if (isWindows) {
+	if (failures.length > 0) {
+		console.error(["Installer check failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"));
+		process.exit(1);
+	}
+	console.log("Installer check passed (PowerShell installer validated; POSIX render skipped on Windows).");
+	process.exit(0);
+}
 
 if (mainCallIndex === -1) {
 	console.error('Installer render check failed: could not find final main "$@" call.');
@@ -39,7 +53,7 @@ print_render_meta() {
 }
 
 render_case() {
-	prime_agent_screen_title="Installing Prime Agent"
+	prime_agent_screen_title="Installing PiLoom"
 	prime_agent_screen_detail="Fetching the verified package."
 	prime_agent_screen_question=
 	prime_agent_screen_frame=1
@@ -82,13 +96,13 @@ screen_case() {
 	prime_agent_test_cols="$1"
 	prime_agent_test_rows="$2"
 	printf '__SCREEN_START__ first\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	prime_agent_screen "Installing PiLoom" "Installing PiLoom" "Fetching the verified package." ""
 	printf '__SCREEN_END__ first\\n' >&2
 
 	prime_agent_test_cols="$3"
 	prime_agent_test_rows="$4"
 	printf '__SCREEN_START__ second\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	prime_agent_screen "Installing PiLoom" "Installing PiLoom" "Fetching the verified package." ""
 	printf '__SCREEN_END__ second\\n' >&2
 }
 
@@ -98,7 +112,7 @@ Linking command binaries.
 Finalizing npm install."
 	for progress_frame in 1 24 25 48 49 200; do
 		prime_agent_animation_frame="$progress_frame"
-		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(prime_agent_animation_status "Installing Prime Agent" "$progress_details" static)" "$(prime_agent_animation_detail "$progress_details")"
+		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(prime_agent_animation_status "Installing PiLoom" "$progress_details" static)" "$(prime_agent_animation_detail "$progress_details")"
 	done
 }
 
@@ -254,7 +268,7 @@ function assertInstallerProgress(progress) {
 			`expected progress sample ${index + 1} to show "${expectedDetail}", got "${progress[index].detail}"`,
 		);
 		check(
-			progress[index].status === "Installing Prime Agent...",
+			progress[index].status === "Installing PiLoom...",
 			`expected progress sample ${index + 1} to use indeterminate status`,
 		);
 		check(!progress[index].status.includes("%"), `expected progress sample ${index + 1} not to include a percent`);
@@ -297,6 +311,22 @@ function check(condition, message) {
 	if (!condition) {
 		failures.push(message);
 	}
+}
+
+function checkPowerShellInstaller(source) {
+	check(source.includes('$unconfiguredBaseUrl = "__PRIME_AGENT_DOWNLOAD_BASE_URL__"'), "PowerShell installer is missing the download URL sentinel");
+	check(source.includes('$unconfiguredDefaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_" + "CHANNEL__"'), "PowerShell installer is missing the release channel sentinel");
+	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
+	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
+	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
+	check(source.includes("install --global"), "PowerShell installer must install the package globally with npm");
+	check(source.includes('else { "piloom" }'), "PowerShell installer must expose piloom as the default command");
+	check(source.includes("npm prefix --global"), "PowerShell installer must resolve npm's global command directory");
+	check(source.includes('[Environment]::SetEnvironmentVariable("Path"'), "PowerShell installer must persist a missing user PATH entry");
+	check(source.includes('"$Name.cmd"'), "PowerShell installer must verify the generated Windows command shim");
+	check(source.includes("[guid]::NewGuid"), "PowerShell installer must use a unique temporary directory");
+	check(source.includes("Remove-Item -LiteralPath $temporaryDirectory"), "PowerShell installer must clean up its temporary directory");
+	check(!source.includes("curl -LsSf") && !source.includes("install.sh"), "PowerShell installer must not depend on the POSIX installer");
 }
 
 function emptyParsedCase() {

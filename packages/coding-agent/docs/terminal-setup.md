@@ -101,6 +101,6 @@ For the best experience, use a terminal that supports the Kitty keyboard protoco
 
 The built-in terminal has limited escape sequence support. Shift+Enter cannot be distinguished from Enter in IntelliJ's terminal.
 
-If you want the hardware cursor visible, set `PI_HARDWARE_CURSOR=1` before running `prime-agent` (disabled by default for compatibility).
+If you want the hardware cursor visible, set `PI_HARDWARE_CURSOR=1` before running `piloom` (disabled by default for compatibility).
 
 Consider using a dedicated terminal emulator for the best experience.
