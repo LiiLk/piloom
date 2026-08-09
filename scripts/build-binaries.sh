@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build pi binaries for all platforms locally.
+# Build PiLoom binaries for all platforms locally.
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
@@ -12,11 +12,11 @@
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
+#     piloom-darwin-arm64.tar.gz
+#     piloom-darwin-x64.tar.gz
+#     piloom-linux-x64.tar.gz
+#     piloom-linux-arm64.tar.gz
+#     piloom-windows-x64.zip
 
 set -euo pipefail
 
@@ -107,9 +107,9 @@ for platform in "${PLATFORMS[@]}"; do
     # call site has a try/catch fallback. For Windows builds, we copy the
     # appropriate .node file alongside the binary below.
     if [[ "$platform" == "windows-x64" ]]; then
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/pi.exe
+        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/piloom.exe
     else
-        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/pi
+        bun build --compile --external koffi --target=bun-$platform ./dist/bun/cli.js --outfile binaries/$platform/piloom
     fi
 done
 
@@ -130,13 +130,20 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r examples binaries/$platform/
     cp -r skills binaries/$platform/
 
-    # Copy koffi native module for Windows (needed for VT input support)
-    if [[ "$platform" == "windows-x64" ]]; then
-        mkdir -p binaries/$platform/node_modules/koffi/build/koffi/win32_x64
-        cp ../../node_modules/koffi/index.js binaries/$platform/node_modules/koffi/
-        cp ../../node_modules/koffi/package.json binaries/$platform/node_modules/koffi/
-        cp ../../node_modules/koffi/build/koffi/win32_x64/koffi.node binaries/$platform/node_modules/koffi/build/koffi/win32_x64/
-    fi
+    # Koffi is externalized from the shared CLI bundle, so every standalone
+    # target needs the matching native module even though its APIs are used only
+    # by Windows-specific runtime paths.
+    case "$platform" in
+        darwin-arm64) koffi_target="darwin_arm64" ;;
+        darwin-x64) koffi_target="darwin_x64" ;;
+        linux-arm64) koffi_target="linux_arm64" ;;
+        linux-x64) koffi_target="linux_x64" ;;
+        windows-x64) koffi_target="win32_x64" ;;
+    esac
+    mkdir -p binaries/$platform/node_modules/koffi/build/koffi/$koffi_target
+    cp ../../node_modules/koffi/index.js binaries/$platform/node_modules/koffi/
+    cp ../../node_modules/koffi/package.json binaries/$platform/node_modules/koffi/
+    cp ../../node_modules/koffi/build/koffi/$koffi_target/koffi.node binaries/$platform/node_modules/koffi/build/koffi/$koffi_target/
 done
 
 # Create archives
@@ -145,12 +152,12 @@ cd binaries
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == "windows-x64" ]]; then
         # Windows (zip)
-        echo "Creating pi-$platform.zip..."
-        (cd $platform && zip -r ../pi-$platform.zip .)
+        echo "Creating piloom-$platform.zip..."
+        (cd $platform && zip -r ../piloom-$platform.zip .)
     else
         # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
-        echo "Creating pi-$platform.tar.gz..."
-        mv $platform pi && tar -czf pi-$platform.tar.gz pi && mv pi $platform
+        echo "Creating piloom-$platform.tar.gz..."
+        mv $platform piloom && tar -czf piloom-$platform.tar.gz piloom && mv piloom $platform
     fi
 done
 
@@ -159,9 +166,9 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf $platform
     if [[ "$platform" == "windows-x64" ]]; then
-        mkdir -p $platform && (cd $platform && unzip -q ../pi-$platform.zip)
+        mkdir -p $platform && (cd $platform && unzip -q ../piloom-$platform.zip)
     else
-        tar -xzf pi-$platform.tar.gz && mv pi $platform
+        tar -xzf piloom-$platform.tar.gz && mv piloom $platform
     fi
 done
 
@@ -172,5 +179,5 @@ ls -lh *.tar.gz *.zip 2>/dev/null || true
 echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
-    echo "  binaries/$platform/pi"
+    echo "  binaries/$platform/piloom"
 done

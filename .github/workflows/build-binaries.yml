@@ -1,4 +1,4 @@
-name: Release Prime Agent
+name: Release PiLoom
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
         type: string
 
 concurrency:
-  group: release-prime-agent
+  group: release-piloom
   cancel-in-progress: false
   queue: max
 
@@ -188,9 +188,102 @@ jobs:
           path: packages/coding-agent/release/beta/artifacts/*
           if-no-files-found: error
 
+  windows-verify:
+    name: Verify Windows package
+    runs-on: windows-latest
+    needs: release-context
+    permissions:
+      contents: read
+    env:
+      BUILD_REF: ${{ needs.release-context.outputs.build_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.BUILD_REF }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm.cmd ci
+
+      - name: Build
+        run: npm.cmd run build
+
+      - name: Install uv
+        run: |
+          python -m pip install uv
+          uv --version
+
+      - name: Check
+        run: npm.cmd run check
+
+      - name: Test kernel and lifecycle paths
+        working-directory: packages/coding-agent
+        run: |
+          npm.cmd run test:kernel
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/kernel-startup.test.ts test/owned-session-worker-process.test.ts test/package-self-update-daemon.test.ts
+      - name: Test Windows portability paths
+        working-directory: packages/coding-agent
+        run: |
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-socket.test.ts test/daemon-launch.test.ts test/daemon-command.test.ts test/daemon-windows-auth.test.ts test/windows-job-object.test.ts test/piloom-command.test.ts test/exec.test.ts test/daemon-ps.test.ts test/child-process.test.ts test/shell.test.ts test/session-lease.test.ts test/tools-manager.test.ts test/auth-storage.test.ts test/telemetry.test.ts test/refinement.test.ts test/session-manager-flush.test.ts test/tools.test.ts
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run --no-file-parallelism test/daemon-supervisor-process.test.ts
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-supervisor-process.test.ts --testNamePattern "isolates a root, streams a chunked snapshot, and adopts the same worker after restart" --tagsFilter process-stress
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/package-manager.test.ts --testNamePattern "quotes Windows-shell"
+
+  windows-binary:
+    name: Build Windows binary
+    runs-on: windows-latest
+    needs: release-context
+    permissions:
+      contents: read
+    env:
+      BUILD_REF: ${{ needs.release-context.outputs.build_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.BUILD_REF }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: npm.cmd ci
+
+      - name: Build and smoke-test Windows binary
+        run: |
+          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build-windows-binary.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\windows-release"
+          $binary = Get-ChildItem -LiteralPath "$env:GITHUB_WORKSPACE\packages\coding-agent\binaries\windows-x64" -File | Where-Object { $_.Name -eq "piloom.exe" -or $_.Name -eq "piloom" } | Select-Object -First 1
+          if (-not $binary) { throw "Windows binary was not staged." }
+          & $binary.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw "Windows binary --version smoke test failed with exit code $LASTEXITCODE." }
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: piloom-windows-x64
+          path: windows-release/*
+          if-no-files-found: error
+
   publish:
     runs-on: ubuntu-latest
-    needs: [release-context, build]
+    needs: [release-context, build, windows-verify, windows-binary]
     permissions:
       contents: write
     env:
@@ -226,6 +319,12 @@ jobs:
           name: prime-agent-beta
           path: release-artifacts/beta
 
+      - name: Download Windows binary
+        uses: actions/download-artifact@v8
+        with:
+          name: piloom-windows-x64
+          path: release-artifacts/windows
+
       - name: Prepare installer
         run: |
           INSTALL_BASE_URL="${R2_PUBLIC_BASE_URL%/}"
@@ -237,11 +336,17 @@ jobs:
           const baseUrl = process.env.INSTALL_BASE_URL;
           if (!baseUrl) throw new Error("INSTALL_BASE_URL is required");
           const installer = fs.readFileSync("install.sh", "utf8");
+          const powershellInstaller = fs.readFileSync("install.ps1", "utf8");
           const renderInstaller = (channel) => installer
+            .replaceAll("__PRIME_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
+            .replaceAll("__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__", channel);
+          const renderPowerShellInstaller = (channel) => powershellInstaller
             .replaceAll("__PRIME_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
             .replaceAll("__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__", channel);
           fs.writeFileSync("/tmp/prime-agent-install.sh", renderInstaller("stable"));
           fs.writeFileSync("/tmp/prime-agent-install-beta.sh", renderInstaller("beta"));
+          fs.writeFileSync("/tmp/prime-agent-install.ps1", renderPowerShellInstaller("stable"));
+          fs.writeFileSync("/tmp/prime-agent-install-beta.ps1", renderPowerShellInstaller("beta"));
           NODE
 
       - name: Extract production release notes
@@ -288,6 +393,13 @@ jobs:
             --content-type text/plain \
             --cache-control no-cache
 
+          for artifact in release-artifacts/windows/*.zip release-artifacts/windows/*.sha256; do
+            test -f "$artifact"
+            aws s3 cp "$artifact" "s3://${R2_BUCKET}/releases/v${PRODUCTION_VERSION}/$(basename "$artifact")" \
+              --endpoint-url "$R2_ENDPOINT_URL" \
+              --cache-control 'public, max-age=31536000, immutable'
+          done
+
           aws s3 cp /tmp/prime-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
@@ -296,6 +408,16 @@ jobs:
           aws s3 cp /tmp/prime-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/prime-agent-install.ps1 "s3://${R2_BUCKET}/install.ps1" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/prime-agent-install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
             --cache-control no-cache
 
       - name: Create production GitHub release
@@ -311,13 +433,13 @@ jobs:
           fi
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* --clobber
+            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* release-artifacts/windows/* --clobber
           else
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
               "${target_args[@]}" \
               --notes-file /tmp/release-notes.md \
-              "$PRODUCTION_DIR"/*
+              "$PRODUCTION_DIR"/* release-artifacts/windows/*
           fi
 
       - name: Publish immutable beta artifacts to R2
@@ -338,6 +460,13 @@ jobs:
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
               --content-type application/gzip \
+              --cache-control 'public, max-age=31536000, immutable'
+          done
+
+          for artifact in release-artifacts/windows/*.zip release-artifacts/windows/*.sha256; do
+            test -f "$artifact"
+            aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
+              --endpoint-url "$R2_ENDPOINT_URL" \
               --cache-control 'public, max-age=31536000, immutable'
           done
 
@@ -377,6 +506,16 @@ jobs:
           aws s3 cp /tmp/prime-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/prime-agent-install.ps1 "s3://${R2_BUCKET}/install.ps1" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
+            --cache-control no-cache
+
+          aws s3 cp /tmp/prime-agent-install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type text/plain \
             --cache-control no-cache
 
           printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
