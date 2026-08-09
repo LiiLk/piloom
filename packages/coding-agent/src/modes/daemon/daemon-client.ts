@@ -19,6 +19,7 @@ import {
 	getDaemonCommandCompatibilities,
 	isDaemonMutatingCommand,
 } from "./daemon-protocol.js";
+import { unprotectDaemonSupervisorAuthenticationToken } from "./daemon-supervisor-ownership.js";
 import type { DaemonWorkerCommand, DaemonWorkerCommandBody } from "./daemon-worker-protocol.js";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -429,36 +430,8 @@ export class DaemonClient {
 		}
 
 		if (isDaemonHello(message)) {
-			this.helloMessage = message;
-			for (const waiter of [...this.helloWaiters]) {
-				clearTimeout(waiter.timeout);
-				this.helloWaiters.delete(waiter);
-				waiter.resolve(message);
-			}
-			if (this.socket && !this.socket.destroyed) {
-				for (const [id, pending] of this.pendingRequests) {
-					if (!pending.awaitingReconnect) {
-						continue;
-					}
-					pending.awaitingReconnect = false;
-					const missingCompatibility = pending.compatibilities.find(
-						(compatibility) => !this.meetsCommandCompatibility(message, compatibility),
-					);
-					if (missingCompatibility) {
-						this.pendingRequests.delete(id);
-						pending.reject(
-							new DaemonCapabilityUnavailableError(
-								pending.commandType as DaemonCommand["type"],
-								missingCompatibility.capability,
-								true,
-							),
-						);
-						continue;
-					}
-					this.armPendingRequestTimeout(id, pending);
-					this.socket.write(pending.wireData);
-				}
-			}
+			void this.authenticateAndAcceptHello(message);
+			return;
 		}
 		if (isDaemonClosing(message)) {
 			this.daemonClosingReason = message.reason;
@@ -495,6 +468,82 @@ export class DaemonClient {
 		}
 	}
 
+	private async authenticateAndAcceptHello(message: DaemonHello): Promise<void> {
+		const socket = this.socket;
+		if (!socket || socket.destroyed) {
+			return;
+		}
+		try {
+			if (message.serverCapabilities?.includes("windows_pipe_auth")) {
+				if (!message.supervisorGeneration || !message.supervisorProtectedAuthenticationToken) {
+					throw new Error("Authenticated daemon hello is missing its protected authentication metadata");
+				}
+				const token = unprotectDaemonSupervisorAuthenticationToken(
+					message.supervisorProtectedAuthenticationToken,
+					this.socketPath,
+					message.supervisorGeneration,
+				);
+				if (!token) {
+					throw new Error("Unable to load the current Windows daemon authentication token");
+				}
+				const response = await this.requestWire({ type: "daemon_auth", token }, RECONNECT_HELLO_TIMEOUT_MS);
+				if (!response.success) {
+					throw new Error(response.error);
+				}
+			}
+			if (this.socket !== socket || socket.destroyed) {
+				return;
+			}
+			this.acceptHello(message, socket);
+		} catch (error) {
+			if (this.socket !== socket) {
+				return;
+			}
+			const authenticationError =
+				error instanceof Error ? error : new Error(`Daemon authentication failed: ${String(error)}`);
+			this.notifyClosed(socket, authenticationError);
+			socket.destroy();
+		}
+	}
+
+	private acceptHello(message: DaemonHello, socket: Socket): void {
+		this.helloMessage = message;
+		for (const waiter of [...this.helloWaiters]) {
+			clearTimeout(waiter.timeout);
+			this.helloWaiters.delete(waiter);
+			waiter.resolve(message);
+		}
+		for (const [id, pending] of this.pendingRequests) {
+			if (!pending.awaitingReconnect) {
+				continue;
+			}
+			pending.awaitingReconnect = false;
+			const missingCompatibility = pending.compatibilities.find(
+				(compatibility) => !this.meetsCommandCompatibility(message, compatibility),
+			);
+			if (missingCompatibility) {
+				this.pendingRequests.delete(id);
+				pending.reject(
+					new DaemonCapabilityUnavailableError(
+						pending.commandType as DaemonCommand["type"],
+						missingCompatibility.capability,
+						true,
+					),
+				);
+				continue;
+			}
+			this.armPendingRequestTimeout(id, pending);
+			socket.write(pending.wireData);
+		}
+		for (const listener of this.listeners) {
+			try {
+				listener(message);
+			} catch {
+				// A consumer failure must not interrupt protocol parsing for other clients.
+			}
+		}
+	}
+
 	private acknowledgeCommandResult(commandId: string): void {
 		const hello = this.helloMessage;
 		if (
@@ -515,7 +564,7 @@ export class DaemonClient {
 
 	private rejectAll(error: Error, preservePendingRequests = false): void {
 		for (const [id, pending] of this.pendingRequests) {
-			if (preservePendingRequests) {
+			if (preservePendingRequests && pending.commandType !== "daemon_auth") {
 				if (pending.timeout) {
 					clearTimeout(pending.timeout);
 					pending.timeout = undefined;

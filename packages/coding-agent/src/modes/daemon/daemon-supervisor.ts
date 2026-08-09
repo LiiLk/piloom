@@ -44,6 +44,7 @@ import { canonicalSessionPath, getProcessStartId, SessionAlreadyActiveError } fr
 import { readSessionInfo, type SessionInfo } from "../../core/session-manager.js";
 import { SettingsManager } from "../../core/settings-manager.js";
 import { signalProcessGroupOrProcess } from "../../utils/child-process.js";
+import { killProcessTree } from "../../utils/shell.js";
 import type { AgentConnectionHeartbeat } from "../agent-connection/types.js";
 import { attachJsonlLineReader, serializeJsonLine } from "../rpc/jsonl.js";
 import type { PrivateFrame } from "../session-worker/private-framing.js";
@@ -58,7 +59,6 @@ import {
 	DAEMON_COMMAND_COMPATIBILITY,
 	DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION,
 	DAEMON_DEFAULT_CLIENT_CAPABILITIES,
-	DAEMON_DEFAULT_SERVER_CAPABILITIES,
 	DAEMON_PROTOCOL_INFO,
 	DAEMON_SCHEMA_ID,
 	DAEMON_SCHEMA_REVISION,
@@ -71,12 +71,14 @@ import {
 	type DaemonResponse,
 	type DaemonUpdateRestartManifest,
 	failure,
+	getDaemonSupervisorServerCapabilities,
 	isDaemonCommandEnvelope,
 	isDaemonMutatingCommand,
 	salvageDaemonCommandId,
 	success,
 	UPDATE_RESTART_DRAIN_COMMANDS,
 } from "./daemon-protocol.js";
+import { verifyDaemonPublicAuthentication } from "./daemon-public-auth.js";
 import { getDaemonRuntimeIdentity } from "./daemon-runtime-identity.js";
 import { matchesSessionIdSuffix } from "./daemon-session-id.js";
 import {
@@ -124,8 +126,17 @@ import { WorkerRecoveryJournal } from "./worker-recovery-journal.js";
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type DaemonCommandBody = DistributiveOmit<DaemonCommand, "id">;
 
+function terminateWorkerProcess(pid: number, signal: NodeJS.Signals): void {
+	if (process.platform === "win32") {
+		killProcessTree(pid);
+		return;
+	}
+	signalProcessGroupOrProcess(pid, signal);
+}
+
 const structuredLog = getLogger("coding-agent.daemon-supervisor");
 const WORKER_CONNECT_TIMEOUT_MS = 30_000;
+const WINDOWS_PIPE_AUTH_TIMEOUT_MS = 3000;
 const WORKER_REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const UPDATE_RESTART_MUTATION_DRAIN_TIMEOUT_MS = 80_000;
 const UPDATE_RESTART_WORKER_REQUEST_TIMEOUT_MS = 90_000;
@@ -606,6 +617,7 @@ export class DaemonSupervisor {
 	private readonly compactCatchupInProgress = new Set<string>();
 	private agentPeerSyncQueue: Promise<void> = Promise.resolve();
 	private readonly pendingSessionNames = new Set<string>();
+	private readonly windowsAuthenticationTimeouts = new Map<DaemonSocketClient, ReturnType<typeof setTimeout>>();
 	private readonly catalog: DaemonCatalogClient;
 	private readonly settingsManager: SettingsManager;
 	private idleEvictionTimer?: ReturnType<typeof setTimeout>;
@@ -1008,7 +1020,7 @@ export class DaemonSupervisor {
 			attachedActiveSessionIds: new Set(),
 			catchupActiveSessionIds: new Set(),
 			backpressured: false,
-			authenticated: true,
+			authenticated: process.platform !== "win32",
 			snapshotActiveSessionIds: new Set(),
 			detachInput: () => {},
 			supportsExtensionUi: false,
@@ -1018,6 +1030,11 @@ export class DaemonSupervisor {
 		void this.ready.then(
 			() => {
 				if (!client.socket.destroyed && this.clients.has(client)) {
+					if (client.authenticated === false) {
+						const authenticationTimeout = setTimeout(() => client.socket.destroy(), WINDOWS_PIPE_AUTH_TIMEOUT_MS);
+						authenticationTimeout.unref();
+						this.windowsAuthenticationTimeouts.set(client, authenticationTimeout);
+					}
 					this.write(client, {
 						type: "daemon_hello",
 						socketPath: this.socketPath,
@@ -1031,8 +1048,9 @@ export class DaemonSupervisor {
 						supervisorPid: process.pid,
 						supervisorProcessStartId: this.ownership?.record.processStartId,
 						supervisorSocketPath: this.ownership?.record.socketPath,
+						supervisorProtectedAuthenticationToken: this.ownership?.record.protectedAuthenticationToken,
 						clientId: client.id,
-						serverCapabilities: DAEMON_DEFAULT_SERVER_CAPABILITIES,
+						serverCapabilities: getDaemonSupervisorServerCapabilities(),
 					});
 				}
 			},
@@ -1047,6 +1065,7 @@ export class DaemonSupervisor {
 			}
 			cleaned = true;
 			client.detachInput();
+			this.clearWindowsAuthenticationTimeout(client);
 			this.clients.delete(client);
 			this.cancelWaitingPromptAdmissionsForClient(client);
 			for (const activeSessionId of [...client.attachedActiveSessionIds]) {
@@ -1224,6 +1243,10 @@ export class DaemonSupervisor {
 	}
 
 	private async handleLine(client: DaemonSocketClient, line: string): Promise<void> {
+		if (client.authenticated === false) {
+			this.handleWindowsClientAuthentication(client, line);
+			return;
+		}
 		let preParsed: ReturnType<DaemonSupervisor["parseCommandAndRegisterPromptAdmission"]>;
 		try {
 			preParsed = this.parseCommandAndRegisterPromptAdmission(client, line);
@@ -1370,6 +1393,26 @@ export class DaemonSupervisor {
 		} finally {
 			if (mutation) this.mutationDrain.end();
 		}
+	}
+
+	private handleWindowsClientAuthentication(client: DaemonSocketClient, line: string): void {
+		const result = verifyDaemonPublicAuthentication(line, this.ownership?.authenticationToken);
+		if (!result.authenticated) {
+			this.write(client, failure(result.id, "daemon_auth", "Daemon authentication failed"));
+			client.socket.end();
+			return;
+		}
+
+		client.authenticated = true;
+		this.clearWindowsAuthenticationTimeout(client);
+		this.write(client, success(result.id, "daemon_auth"));
+	}
+
+	private clearWindowsAuthenticationTimeout(client: DaemonSocketClient): void {
+		const timeout = this.windowsAuthenticationTimeouts.get(client);
+		if (!timeout) return;
+		clearTimeout(timeout);
+		this.windowsAuthenticationTimeouts.delete(client);
 	}
 
 	private async handleCommand(
@@ -2117,6 +2160,7 @@ export class DaemonSupervisor {
 		const child: ChildProcess = spawn(launch.command, launch.args, {
 			cwd: createCommand.config?.cwd ?? process.cwd(),
 			detached: true,
+			windowsHide: process.platform === "win32",
 			env: createCliSubprocessEnv({
 				...process.env,
 				...launchEnv,
@@ -2379,7 +2423,7 @@ export class DaemonSupervisor {
 			try {
 				// A tombstoned worker must not run long enough to elect another
 				// supervisor while its intentional stop is being adopted.
-				signalProcessGroupOrProcess(worker.descriptor.pid, "SIGKILL");
+				terminateWorkerProcess(worker.descriptor.pid, "SIGKILL");
 				await this.stopWorker(worker, true, true, worker.descriptor.archiveOnStop === true);
 				this.log(`Completed intentional stop for worker ${worker.descriptor.workerId} during supervisor adoption`);
 			} catch (error) {
@@ -2823,7 +2867,7 @@ export class DaemonSupervisor {
 	private async recoverUncertainWorkerOperations(worker: ResidentWorker, killWorkerProcess = true): Promise<void> {
 		await this.assertRecoveryAllowed();
 		if (killWorkerProcess) {
-			signalProcessGroupOrProcess(worker.descriptor.pid, "SIGKILL");
+			terminateWorkerProcess(worker.descriptor.pid, "SIGKILL");
 		}
 		const orphanProcessJournalPath = worker.descriptor.orphanProcessJournalPath;
 		if (orphanProcessJournalPath) {
@@ -2833,6 +2877,10 @@ export class DaemonSupervisor {
 						continue;
 					}
 					const { pid } = orphan;
+					if (process.platform === "win32") {
+						killProcessTree(pid);
+						continue;
+					}
 					try {
 						process.kill(-pid, "SIGKILL");
 					} catch {
@@ -4562,9 +4610,13 @@ export class DaemonSupervisor {
 			worker.client.close();
 			worker.client = undefined;
 		} else if (directChild) {
-			directChild.child.kill("SIGTERM");
+			if (directChild.child.pid) {
+				terminateWorkerProcess(directChild.child.pid, "SIGTERM");
+			} else {
+				directChild.child.kill("SIGTERM");
+			}
 		} else if (isProcessAlive(worker.descriptor.pid)) {
-			signalProcessGroupOrProcess(worker.descriptor.pid, "SIGTERM");
+			terminateWorkerProcess(worker.descriptor.pid, "SIGTERM");
 		}
 		const isWorkerProcessAlive = () =>
 			directChild
@@ -4574,11 +4626,28 @@ export class DaemonSupervisor {
 		while (isWorkerProcessAlive() && Date.now() < gracefulDeadline) {
 			await delay(25);
 		}
-		if (force && isWorkerProcessAlive()) {
+		if ((force || process.platform === "win32") && isWorkerProcessAlive()) {
 			if (directChild) {
+				if (directChild.child.pid) {
+					terminateWorkerProcess(directChild.child.pid, force ? "SIGKILL" : "SIGTERM");
+				} else {
+					directChild.child.kill(force ? "SIGKILL" : "SIGTERM");
+				}
+			} else {
+				terminateWorkerProcess(worker.descriptor.pid, force ? "SIGKILL" : "SIGTERM");
+			}
+			const terminationDeadline = Date.now() + 1000;
+			while (isWorkerProcessAlive() && Date.now() < terminationDeadline) {
+				await delay(25);
+			}
+		}
+		if (!force && process.platform === "win32" && isWorkerProcessAlive()) {
+			if (directChild?.child.pid) {
+				terminateWorkerProcess(directChild.child.pid, "SIGKILL");
+			} else if (directChild) {
 				directChild.child.kill("SIGKILL");
 			} else {
-				signalProcessGroupOrProcess(worker.descriptor.pid, "SIGKILL");
+				terminateWorkerProcess(worker.descriptor.pid, "SIGKILL");
 			}
 			const forceDeadline = Date.now() + 1000;
 			while (isWorkerProcessAlive() && Date.now() < forceDeadline) {
@@ -4658,6 +4727,9 @@ export class DaemonSupervisor {
 
 	private broadcastHeartbeatsChanged(): void {
 		for (const client of this.clients) {
+			if (!client.authenticated) {
+				continue;
+			}
 			this.write(client, { type: "heartbeats_changed" });
 		}
 	}
@@ -4862,6 +4934,7 @@ export class DaemonSupervisor {
 			const replacement = spawn(launch.command, launch.args, {
 				cwd: this.defaultSessionConfig.cwd ?? process.cwd(),
 				detached: true,
+				windowsHide: process.platform === "win32",
 				env: environment,
 				stdio: "ignore",
 			});

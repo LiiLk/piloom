@@ -15,7 +15,7 @@ import {
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import { shouldUseWindowsShell } from "./utils/child-process.js";
+import { prepareWindowsShellInvocation, shouldUseWindowsShell } from "./utils/child-process.js";
 
 // =============================================================================
 // Package Detection
@@ -206,10 +206,12 @@ function readCommandOutput(
 	args: string[],
 	options: { requireSuccess?: boolean } = {},
 ): string | undefined {
-	const result = spawnSync(command, args, {
+	const invocation = prepareWindowsShellInvocation(command, args);
+	const result = spawnSync(invocation.command, invocation.args, {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 		shell: shouldUseWindowsShell(command),
+		windowsHide: process.platform === "win32",
 	});
 	if (result.status === 0) return result.stdout.trim() || undefined;
 	if (options.requireSuccess) {
@@ -330,7 +332,7 @@ export function getSelfUpdateUnavailableInstruction(
 		return `Download from: https://github.com/PrimeIntellect-ai/prime-agent/releases/latest`;
 	}
 	if (method === "homebrew") {
-		return `Update with: brew upgrade ${APP_NAME}`;
+		return `Update with: brew upgrade ${packageName}`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, updateSpec, npmCommand, updatePackageName);
 	if (command) {
@@ -365,9 +367,7 @@ export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
 	const envDir = process.env.PI_PACKAGE_DIR;
 	if (envDir) {
-		if (envDir === "~") return homedir();
-		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
-		return envDir;
+		return expandTildePath(envDir);
 	}
 
 	if (isBunBinary) {
@@ -489,6 +489,7 @@ interface PackageJson {
 	version?: string;
 	piConfig?: {
 		name?: string;
+		commandName?: string;
 		configDir?: string;
 	};
 }
@@ -496,13 +497,14 @@ interface PackageJson {
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 
 const piConfigName: string | undefined = pkg.piConfig?.name;
+const piConfigCommandName: string | undefined = pkg.piConfig?.commandName;
 const envPrefix =
 	(piConfigName || "pi")
 		.toUpperCase()
 		.replace(/[^A-Z0-9]+/g, "_")
 		.replace(/^_+|_+$/g, "") || "PI";
 export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
-export const APP_NAME: string = piConfigName || "pi";
+export const APP_NAME: string = piConfigCommandName || piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".prime/agent";
 export const VERSION: string = pkg.version || "0.0.0";
@@ -514,7 +516,7 @@ export const ENV_LEGACY_SESSION_DIR = `${envPrefix}_CODING_AGENT_SESSION_DIR`;
 
 export function expandTildePath(path: string): string {
 	if (path === "~") return homedir();
-	if (path.startsWith("~/")) return homedir() + path.slice(1);
+	if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
 	return path;
 }
 

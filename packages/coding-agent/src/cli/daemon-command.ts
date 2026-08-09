@@ -8,15 +8,25 @@ import { expandTildePath } from "../config.js";
 import type { AgentSessionEvent } from "../core/agent-session.js";
 import type { AgentSessionRuntimeConfig } from "../core/agent-session-config.js";
 import { type AgentCronJob, formatAgentCronJob } from "../core/cron-jobs.js";
+import { ORPHAN_PROCESS_JOURNAL_ENV } from "../core/orphan-process-journal.js";
+import { SESSION_LEASE_OWNER_ID_ENV, SESSION_LEASES_ENABLED_ENV } from "../core/session-lease.js";
 import { DaemonClient, type DaemonClientMessageListener } from "../modes/daemon/daemon-client.js";
 import type { DaemonOutbound, DaemonResponse } from "../modes/daemon/daemon-protocol.js";
 import { matchesSessionIdSuffix } from "../modes/daemon/daemon-session-id.js";
 import type { SessionSummary } from "../modes/daemon/daemon-session-list.js";
 import { defaultDaemonSocketPath } from "../modes/daemon/daemon-socket.js";
+import {
+	DAEMON_WORKER_ACTIVE_SESSION_ID_ENV,
+	DAEMON_WORKER_RECOVERY_JOURNAL_ENV,
+	DAEMON_WORKER_ROLE_ENV,
+	DAEMON_WORKER_SUPERVISOR_SOCKET_ENV,
+	DAEMON_WORKER_TOKEN_ENV,
+} from "../modes/daemon/daemon-worker-protocol.js";
 import { isLocalPath } from "../utils/paths.js";
 import { isValidThinkingLevel } from "./args.js";
 import { formatSessionListTable } from "./daemon-list-format.js";
 import { runPs, runReap } from "./daemon-ps.js";
+import { createCliSubprocessEnv } from "./subprocess-launch.js";
 
 interface ParsedDaemonClientCommand {
 	command: string;
@@ -691,10 +701,20 @@ async function runStart(parsed: ParsedDaemonClientCommand): Promise<void> {
 		parsed.socketPath,
 		...sessionArgs.daemonArgs.filter((arg) => arg !== "--background" && arg !== "-d"),
 	];
+	const environment = createCliSubprocessEnv();
+	delete environment[DAEMON_WORKER_ROLE_ENV];
+	delete environment[DAEMON_WORKER_TOKEN_ENV];
+	delete environment[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV];
+	delete environment[DAEMON_WORKER_RECOVERY_JOURNAL_ENV];
+	delete environment[DAEMON_WORKER_SUPERVISOR_SOCKET_ENV];
+	delete environment[ORPHAN_PROCESS_JOURNAL_ENV];
+	delete environment[SESSION_LEASES_ENABLED_ENV];
+	delete environment[SESSION_LEASE_OWNER_ID_ENV];
 	const child = spawn(process.execPath, daemonArgs, {
 		cwd: sessionArgs.config?.cwd ?? process.cwd(),
 		detached: true,
-		env: process.env,
+		windowsHide: process.platform === "win32",
+		env: environment,
 		stdio: "ignore",
 	});
 	child.unref();

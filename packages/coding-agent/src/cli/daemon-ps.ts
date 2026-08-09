@@ -12,7 +12,11 @@ import {
 	type DaemonRuntimeIdentity,
 } from "../modes/daemon/daemon-protocol.js";
 import { defaultDaemonSocketDir, defaultDaemonSocketPath } from "../modes/daemon/daemon-socket.js";
-import { acquireDaemonShutdownAdmission } from "../modes/daemon/daemon-supervisor-ownership.js";
+import {
+	acquireDaemonShutdownAdmission,
+	type DaemonSupervisorOwnerSnapshot,
+	readDaemonSupervisorOwnerSnapshot,
+} from "../modes/daemon/daemon-supervisor-ownership.js";
 import type { DaemonWorkerDescriptor } from "../modes/daemon/daemon-worker-protocol.js";
 import { signalProcessGroupOrProcess } from "../utils/child-process.js";
 import { formatDaemonListTable } from "./daemon-ps-format.js";
@@ -20,7 +24,7 @@ import { promptYesNo } from "./daemon-stop-confirm.js";
 
 /**
  * `daemon ps` discovers every prime-agent daemon on the machine, not just the
- * one on a single socket. Discovery has two sources merged by socket path:
+ * one on a single socket. Discovery merges platform-specific sources by socket path:
  *
  *  1. The OS list of listening unix sockets owned by a prime-agent process
  *     (`ss -lxp` on Linux, `lsof` on macOS). Daemons set process.title to
@@ -30,6 +34,9 @@ import { promptYesNo } from "./daemon-stop-confirm.js";
  *     prime-agent`, just parsed.
  *  2. A sweep of the default socket dir, which catches orphaned socket *files*
  *     left behind by daemons that are no longer running.
+ *
+ * On Windows, the validated durable supervisor ownership registry replaces
+ * both POSIX-only sources because named pipes do not have socket files.
  *
  * Each discovered socket is then probed with the existing daemon_hello + list
  * primitives, so introspection works even against stale daemons running an
@@ -162,6 +169,26 @@ export function mergeDiscoveredDaemonProcesses(
 	return [...byIdentity.values()];
 }
 
+export function mapDaemonSupervisorOwnersToProcesses(
+	owners: readonly DaemonSupervisorOwnerSnapshot[],
+	platform: NodeJS.Platform,
+	readProcessStartId: (pid: number) => string | undefined = getProcessStartId,
+	processAlive: (pid: number) => boolean = isProcessAlive,
+): DiscoveredDaemonProcess[] {
+	if (platform !== "win32") {
+		return [];
+	}
+	return owners.flatMap((owner) => {
+		if (!processAlive(owner.pid)) {
+			return [];
+		}
+		if (!owner.processStartId || readProcessStartId(owner.pid) !== owner.processStartId) {
+			return [];
+		}
+		return [{ pid: owner.pid, socketPath: owner.socketPath }];
+	});
+}
+
 /** Parse `ps -o pid=,etimes=` output into a pid → uptime-seconds map. */
 export function parsePsEtimes(stdout: string): Map<number, number> {
 	const uptimes = new Map<number, number>();
@@ -176,7 +203,7 @@ export function parsePsEtimes(stdout: string): Map<number, number> {
 
 function scanListeningDaemons(): DiscoveredDaemonProcess[] {
 	if (process.platform === "win32") {
-		return [];
+		return mapDaemonSupervisorOwnersToProcesses(readDaemonSupervisorOwnerSnapshot(), process.platform);
 	}
 	const ss = spawnSync("ss", ["-lxp"], { encoding: "utf8" });
 	if (!ss.error && ss.status === 0 && typeof ss.stdout === "string") {

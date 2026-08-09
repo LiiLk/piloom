@@ -49,7 +49,7 @@ import type { SessionSummary } from "./daemon-session-list.js";
  */
 
 export const DAEMON_PROTOCOL_NAME = "prime-agent.daemon";
-export const DAEMON_PROTOCOL_VERSION = 7;
+export const DAEMON_PROTOCOL_VERSION = 8;
 export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 9 publishes persisted RLM spawn depth on passive session rows.
 // Revision 10 publishes persisted RLM spawn depth on all session catalog rows.
@@ -57,8 +57,9 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 12 publishes idle-residency metadata on session summary rows.
 // Revision 13 narrows agent-origin reach and roster wire shapes to the nuclear family.
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
-export const DAEMON_SCHEMA_REVISION = 14;
-export const DAEMON_SCHEMA_ID = "protocol-7-schema-14-816309b1cd50";
+// Revision 15 adds authenticated public Windows named-pipe startup.
+export const DAEMON_SCHEMA_REVISION = 15;
+export const DAEMON_SCHEMA_ID = "protocol-8-schema-15-073a222d9a70";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -96,7 +97,8 @@ export type DaemonServerCapability =
 	// identity). Clients must check before sending.
 	| "transient_bash"
 	| "session_input_admission"
-	| "prompt_admission_cancellation";
+	| "prompt_admission_cancellation"
+	| "windows_pipe_auth";
 
 export type DaemonReplayStatus = "complete" | "partial" | "unavailable";
 
@@ -135,6 +137,14 @@ export const DAEMON_DEFAULT_SERVER_CAPABILITIES: readonly DaemonServerCapability
 	"session_input_admission",
 	"prompt_admission_cancellation",
 ];
+
+export function getDaemonSupervisorServerCapabilities(
+	platform: NodeJS.Platform = process.platform,
+): readonly DaemonServerCapability[] {
+	return platform === "win32"
+		? [...DAEMON_DEFAULT_SERVER_CAPABILITIES, "windows_pipe_auth"]
+		: DAEMON_DEFAULT_SERVER_CAPABILITIES;
+}
 
 export interface DaemonRuntimeIdentity {
 	buildId: string;
@@ -342,6 +352,7 @@ export type DaemonSavedSessionListCommand =
 	  };
 
 export type DaemonCommand =
+	| { id?: string; type: "daemon_auth"; token: string }
 	| {
 			id?: string;
 			type: "list";
@@ -635,8 +646,10 @@ const DELETE_RLM_SUBAGENT_COMMAND = {
 } as const;
 const FLAT_SESSION_TREE_COMMAND = { minProtocol: 7 } as const;
 const TELEMETRY_POLICY_COMMAND = { minProtocol: 7, minSchemaRevision: 14 } as const;
+const WINDOWS_PIPE_AUTH_COMMAND = { minProtocol: 8, capability: "windows_pipe_auth" } as const;
 
 export const DAEMON_COMMAND_COMPATIBILITY = {
+	daemon_auth: WINDOWS_PIPE_AUTH_COMMAND,
 	ack_result: LEGACY_DAEMON_COMMAND,
 	list: LEGACY_DAEMON_COMMAND,
 	list_saved_sessions: LEGACY_DAEMON_COMMAND,
@@ -852,6 +865,8 @@ export type DaemonOutbound =
 			supervisorProcessStartId?: string;
 			/** Normalized socket identity stored in the durable owner record. */
 			supervisorSocketPath?: string;
+			/** DPAPI current-user blob used only when windows_pipe_auth is advertised. */
+			supervisorProtectedAuthenticationToken?: string;
 			clientId: DaemonClientId;
 			serverCapabilities: readonly DaemonServerCapability[];
 	  }
