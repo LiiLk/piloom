@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 180" role="img" aria-labelledby="title">
+  <title id="title">PiLoom</title>
+  <defs>
+    <linearGradient id="ribbonGrad" x1="10%" y1="0%" x2="90%" y2="100%">
+      <stop offset="0%" stop-color="#5EEAD4"/>
+      <stop offset="40%" stop-color="#2DD4BF"/>
+      <stop offset="100%" stop-color="#0D9488"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2DD4BF"/>
+      <stop offset="50%" stop-color="#99F6E4"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0D9488" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Elegant flowing ribbon P (Version A) -->
+  <g transform="translate(30, 18)" filter="url(#shadow)">
+    <path fill="url(#ribbonGrad)" d="
+      M 38 18
+      C 72 0, 115 12, 128 52
+      C 138 82, 128 112, 92 122
+      L 70 126
+      L 70 152
+      C 70 160, 62 166, 54 166
+      C 46 166, 38 160, 38 152
+      L 38 62
+      C 38 36, 40 24, 38 18
+      Z
+    "/>
+    <!-- Inner depth cut -->
+    <path fill="#0B1220" d="
+      M 62 54
+      C 88 44, 112 54, 116 80
+      C 120 100, 106 116, 82 120
+      L 62 120
+      Z
+    "/>
+    <!-- Soft highlight -->
+    <path fill="none" stroke="#99F6E4" stroke-width="3.5" stroke-linecap="round" opacity="0.5"
+      d="M 48 28 C 85 8, 118 22, 126 58 C 132 88, 120 110, 95 118"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="190" y="110"
+        font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="70" font-weight="600" letter-spacing="-2.4"
+        fill="url(#textGrad)">PiLoom</text>
+</svg>
