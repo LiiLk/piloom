@@ -403,6 +403,7 @@ function run(command: string, args: string[], options: { stdio?: "ignore" | "inh
 		const child = spawn(command, args, {
 			env: process.env,
 			stdio: options.stdio ?? "ignore",
+			windowsHide: process.platform === "win32",
 		});
 		child.on("error", reject);
 		child.on("exit", (code, signal) => {

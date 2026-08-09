@@ -4,7 +4,7 @@
  */
 
 import { execSync, spawnSync } from "child_process";
-import { getShellConfig } from "../utils/shell.js";
+import { getShellConfig, getShellEnv } from "../utils/shell.js";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -29,6 +29,7 @@ function executeWithConfiguredShell(command: string): { executed: boolean; value
 			encoding: "utf-8",
 			timeout: 10000,
 			stdio: ["ignore", "pipe", "ignore"],
+			env: getShellEnv(shell),
 			shell: false,
 			windowsHide: true,
 		});
@@ -58,6 +59,7 @@ function executeWithDefaultShell(command: string): string | undefined {
 			encoding: "utf-8",
 			timeout: 10000,
 			stdio: ["ignore", "pipe", "ignore"],
+			windowsHide: process.platform === "win32",
 		});
 		return output.trim() || undefined;
 	} catch {

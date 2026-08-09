@@ -66,7 +66,8 @@ function leasesEnabled(environment: NodeJS.ProcessEnv): boolean {
 }
 
 function leaseDirectory(agentDir: string, sessionPath: string): string {
-	const key = createHash("sha256").update(sessionPath).digest("hex");
+	const leaseKeyPath = process.platform === "win32" ? sessionPath.toLowerCase() : sessionPath;
+	const key = createHash("sha256").update(leaseKeyPath).digest("hex");
 	return join(agentDir, "session-leases", `${key}.lock`);
 }
 
@@ -116,6 +117,7 @@ function runProcessQuery(command: string, args: string[]): string {
 	return execFileSync(command, args, {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
+		windowsHide: process.platform === "win32",
 	});
 }
 
@@ -265,7 +267,7 @@ export function acquireSessionLease(
 			} catch (error) {
 				rmSync(candidateDirectory, { recursive: true, force: true });
 				const code = (error as NodeJS.ErrnoException).code;
-				if (code !== "EEXIST" && code !== "ENOTEMPTY") {
+				if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM") {
 					throw error;
 				}
 				const existingOwner = readLeaseOwner(directory);

@@ -7,6 +7,7 @@ type NativeClipboardExecOptions = {
 	input: string;
 	timeout: number;
 	stdio: ["pipe", "ignore", "ignore"];
+	windowsHide?: boolean;
 };
 
 function copyToX11Clipboard(options: NativeClipboardExecOptions): void {
@@ -61,7 +62,12 @@ export async function copyToClipboard(text: string): Promise<void> {
 		return;
 	}
 
-	const options: NativeClipboardExecOptions = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"] };
+	const options: NativeClipboardExecOptions = {
+		input: text,
+		timeout: 5000,
+		stdio: ["pipe", "ignore", "ignore"],
+		...(p === "win32" ? { windowsHide: true } : {}),
+	};
 
 	if (!copied) {
 		try {

@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getKernelVenvDir, getKernelVenvPythonPath } from "../src/core/kernel/bootstrap.js";
 import { KernelManager } from "../src/core/kernel/index.js";
 
 /** Find a python that can launch an ipykernel and has dill, or null to skip. */
 function resolveKernelPython(): string | null {
-	const candidates = [
-		process.env.PRIME_AGENT_KERNEL_PYTHON,
-		join(homedir(), ".prime", "agent", "kernel-venv", "bin", "python"),
-	].filter((p): p is string => Boolean(p));
+	const candidates = [process.env.PRIME_AGENT_KERNEL_PYTHON, getKernelVenvPythonPath(getKernelVenvDir())].filter(
+		(p): p is string => Boolean(p),
+	);
 	for (const python of candidates) {
 		if (!existsSync(python)) continue;
 		const check = spawnSync(python, ["-c", "import ipykernel, dill"], { encoding: "utf8" });

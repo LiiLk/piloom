@@ -119,7 +119,8 @@ describe("session leases", () => {
 	it("reports guard contention as a coordination failure", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(join(agentDir, "session.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const leaseKeyPath = process.platform === "win32" ? sessionPath.toLowerCase() : sessionPath;
+		const key = createHash("sha256").update(leaseKeyPath).digest("hex");
 		const leaseRoot = join(agentDir, "session-leases");
 		const lockDirectory = join(leaseRoot, `${key}.lock`);
 		mkdirSync(leaseRoot, { recursive: true });
@@ -146,15 +147,30 @@ describe("session leases", () => {
 
 	it("treats symlink aliases as the same persisted session", () => {
 		const agentDir = createTempDir();
-		const sessionPath = join(agentDir, "session.jsonl");
-		const aliasPath = join(agentDir, "session-alias.jsonl");
-		writeFileSync(sessionPath, "");
-		symlinkSync(sessionPath, aliasPath);
+		const sessionPath = join(agentDir, process.platform === "win32" ? "session" : "session.jsonl");
+		const aliasPath = join(agentDir, process.platform === "win32" ? "session-alias" : "session-alias.jsonl");
+		if (process.platform === "win32") {
+			mkdirSync(sessionPath);
+			symlinkSync(sessionPath, aliasPath, "junction");
+		} else {
+			writeFileSync(sessionPath, "");
+			symlinkSync(sessionPath, aliasPath);
+		}
 		const first = acquireSessionLease(sessionPath, agentDir, enabledEnvironment("resident-a"));
 
 		expect(() => acquireSessionLease(aliasPath, agentDir, enabledEnvironment("owned-b"))).toThrow(
 			SessionAlreadyActiveError,
 		);
+		first?.release();
+	});
+
+	it.skipIf(process.platform !== "win32")("treats Windows path casing as the same persisted session", () => {
+		const agentDir = createTempDir();
+		const first = acquireSessionLease(join(agentDir, "Session.jsonl"), agentDir, enabledEnvironment("resident-a"));
+
+		expect(() =>
+			acquireSessionLease(join(agentDir, "session.jsonl"), agentDir, enabledEnvironment("owned-b")),
+		).toThrow(SessionAlreadyActiveError);
 		first?.release();
 	});
 

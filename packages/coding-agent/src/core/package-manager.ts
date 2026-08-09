@@ -28,7 +28,7 @@ import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME, getBundledSkillsDir } from "../config.js";
-import { shouldUseWindowsShell } from "../utils/child-process.js";
+import { prepareWindowsShellInvocation, shouldUseWindowsShell } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
@@ -2378,11 +2378,13 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private spawnCommand(command: string, args: string[], options?: { cwd?: string }): ChildProcess {
-		return spawn(command, args, {
+		const invocation = prepareWindowsShellInvocation(command, args);
+		return spawn(invocation.command, invocation.args, {
 			cwd: options?.cwd,
 			stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
 			shell: shouldUseWindowsShell(command),
 			env: getEnv(),
+			windowsHide: process.platform === "win32",
 		});
 	}
 
@@ -2392,11 +2394,13 @@ export class DefaultPackageManager implements PackageManager {
 		options?: { cwd?: string; env?: Record<string, string> },
 	): ChildProcessByStdio<null, Readable, Readable> {
 		const baseEnv = getEnv();
-		return spawn(command, args, {
+		const invocation = prepareWindowsShellInvocation(command, args);
+		return spawn(invocation.command, invocation.args, {
 			cwd: options?.cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: shouldUseWindowsShell(command),
 			env: options?.env ? { ...baseEnv, ...options.env } : baseEnv,
+			windowsHide: process.platform === "win32",
 		});
 	}
 
@@ -2459,11 +2463,13 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private runCommandSync(command: string, args: string[]): string {
-		const result = spawnSync(command, args, {
+		const invocation = prepareWindowsShellInvocation(command, args);
+		const result = spawnSync(invocation.command, invocation.args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
 			shell: shouldUseWindowsShell(command),
 			env: getEnv(),
+			windowsHide: process.platform === "win32",
 		});
 		if (result.error || result.status !== 0) {
 			throw new Error(

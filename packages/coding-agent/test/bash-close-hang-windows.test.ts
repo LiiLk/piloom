@@ -12,16 +12,19 @@ function toBashSingleQuotedArg(value: string): string {
 
 function createInheritedStdioCommand(pidFile: string): string {
 	const pidFileArg = toBashSingleQuotedArg(pidFile);
+	const childCwdArg = toBashSingleQuotedArg(process.cwd());
 	return (
 		'node -e "' +
 		"const fs=require('fs');" +
 		"const {spawn}=require('child_process');" +
-		"const child=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'inherit',detached:true});" +
+		"const child=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'inherit',detached:true,cwd:process.argv[2]});" +
 		"fs.writeFileSync(process.argv[1], String(child.pid));" +
 		"child.unref();" +
 		"console.log('child-exiting');" +
 		'" ' +
-		pidFileArg
+		pidFileArg +
+		" " +
+		childCwdArg
 	);
 }
 
@@ -77,8 +80,9 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 		mkdirSync(testDir, { recursive: true });
 	});
 
-	afterEach(() => {
-		rmSync(testDir, { recursive: true, force: true });
+	afterEach(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		rmSync(testDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 	});
 
 	it("executeBash resolves after the shell exits even if inherited stdio handles stay open", async () => {

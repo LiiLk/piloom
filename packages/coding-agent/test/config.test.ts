@@ -6,6 +6,7 @@ import {
 	detectInstallMethod,
 	ENV_LEGACY_SESSION_DIR,
 	ENV_SESSION_DIR,
+	expandTildePath,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getSessionsDir,
@@ -58,9 +59,15 @@ afterEach(() => {
 	}
 });
 
-function createNpmPrefixInstall(template = "pi-prefix-"): { prefix: string; packageDir: string } {
+function createNpmPrefixInstall(
+	template = "pi-prefix-",
+	layout: "posix" | "windows" = "posix",
+): {
+	prefix: string;
+	packageDir: string;
+} {
 	const prefix = mkdtempSync(join(tmpdir(), template));
-	const root = join(prefix, "lib", "node_modules");
+	const root = join(prefix, ...(layout === "windows" ? ["node_modules"] : ["lib", "node_modules"]));
 	const scopeDir = join(root, "@earendil-works");
 	const packageDir = join(scopeDir, "pi-coding-agent");
 	mkdirSync(packageDir, { recursive: true });
@@ -272,7 +279,7 @@ describe("detectInstallMethod", () => {
 	});
 
 	test("self-update respects configured npmCommand", () => {
-		const { prefix } = createNpmPrefixInstall();
+		const { prefix } = createNpmPrefixInstall("pi-prefix-", process.platform === "win32" ? "windows" : "posix");
 
 		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", ["npm", "--prefix", prefix]);
 
@@ -398,7 +405,7 @@ describe("detectInstallMethod", () => {
 		});
 	});
 
-	test("does not self-update when npm install path is not writable", () => {
+	test.runIf(process.platform !== "win32")("does not self-update when npm install path is not writable", () => {
 		const { packageDir } = createNpmPrefixInstall();
 		chmodSync(packageDir, 0o500);
 
@@ -433,6 +440,10 @@ describe("session paths", () => {
 		process.env[ENV_SESSION_DIR] = "~/prime-agent-sessions";
 
 		expect(getSessionsDir("/agent")).toBe(join(homedir(), "prime-agent-sessions"));
+	});
+
+	test("expands both slash styles after a tilde", () => {
+		expect(expandTildePath("~\\prime-agent-sessions")).toBe(join(homedir(), "prime-agent-sessions"));
 	});
 
 	test("uses the env session root as the default session dir", () => {

@@ -1,18 +1,43 @@
 import type { ChildProcess } from "node:child_process";
 import { constants } from "node:os";
-import { basename } from "node:path";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
-const WINDOWS_SHELL_COMMANDS = new Set(["npm", "npx", "pnpm", "yarn", "yarnpkg", "corepack"]);
+const WINDOWS_SHELL_COMMANDS = new Set(["bun", "npm", "npx", "pnpm", "yarn", "yarnpkg", "corepack"]);
 
 export function shouldUseWindowsShell(command: string): boolean {
 	if (process.platform !== "win32") return false;
-	const commandName = basename(command).toLowerCase();
+	const commandName = command.replace(/^.*[\\/]/, "").toLowerCase();
 	return commandName.endsWith(".cmd") || commandName.endsWith(".bat") || WINDOWS_SHELL_COMMANDS.has(commandName);
 }
 
+export function quoteWindowsShellArgument(value: string): string {
+	if (process.platform !== "win32" || !/[\s&|<>()^"%]/.test(value)) {
+		return value;
+	}
+	return `"${value.replaceAll("%", "^%").replaceAll('"', '\\"')}"`;
+}
+
+export function prepareWindowsShellInvocation(command: string, args: string[]): { command: string; args: string[] } {
+	if (!shouldUseWindowsShell(command)) {
+		return { command, args };
+	}
+	return {
+		command: quoteWindowsShellArgument(command),
+		args: args.map(quoteWindowsShellArgument),
+	};
+}
+
 export function signalProcessGroupOrProcess(pid: number, signal: NodeJS.Signals): void {
+	if (process.platform === "win32") {
+		try {
+			process.kill(pid, signal);
+		} catch {
+			// The process may already be fully reaped.
+		}
+		return;
+	}
+
 	try {
 		process.kill(-pid, signal);
 		return;

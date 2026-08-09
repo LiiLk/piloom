@@ -10,6 +10,7 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 		cwd: repoDir,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
+		windowsHide: process.platform === "win32",
 	});
 	const branch = result.status === 0 ? result.stdout.trim() : "";
 	return branch || null;
@@ -24,6 +25,7 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 			{
 				cwd: repoDir,
 				encoding: "utf8",
+				windowsHide: process.platform === "win32",
 			},
 			(error: ExecFileException | null, stdout: string) => {
 				if (error) {

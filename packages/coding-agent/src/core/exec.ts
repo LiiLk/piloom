@@ -3,7 +3,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { waitForChildProcess } from "../utils/child-process.js";
+import { prepareWindowsShellInvocation, shouldUseWindowsShell, waitForChildProcess } from "../utils/child-process.js";
+import { killProcessTree } from "../utils/shell.js";
 
 /**
  * Options for executing shell commands.
@@ -58,9 +59,11 @@ export async function execCommand(
 	options?: ExecOptions,
 ): Promise<ExecResult> {
 	return new Promise((resolve) => {
-		const proc = spawn(command, args, {
+		const invocation = prepareWindowsShellInvocation(command, args);
+		const proc = spawn(invocation.command, invocation.args, {
 			cwd,
-			shell: false,
+			shell: shouldUseWindowsShell(command),
+			windowsHide: process.platform === "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 			// Merge per-call env over the parent env so callers can scope vars
 			// (e.g. herdr pane identity) without mutating the shared process.env.
@@ -76,12 +79,20 @@ export async function execCommand(
 		const killProcess = () => {
 			if (!killed) {
 				killed = true;
-				proc.kill("SIGTERM");
+				if (process.platform === "win32" && proc.pid) {
+					killProcessTree(proc.pid);
+				} else {
+					proc.kill("SIGTERM");
+				}
 				// Force kill after 5 seconds if SIGTERM doesn't work
 				forceKillTimeoutId = setTimeout(() => {
 					forceKillTimeoutId = undefined;
 					if (proc.exitCode === null && proc.signalCode === null) {
-						proc.kill("SIGKILL");
+						if (process.platform === "win32" && proc.pid) {
+							killProcessTree(proc.pid);
+						} else {
+							proc.kill("SIGKILL");
+						}
 					}
 				}, 5000);
 			}

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,38 +14,56 @@ async function waitForFile(path: string): Promise<void> {
 	}
 }
 
-describe.skipIf(process.platform === "win32")("execCommand", () => {
-	it("force kills a process that ignores SIGTERM and cleans up the fallback timer", async () => {
-		const testDir = mkdtempSync(join(tmpdir(), "prime-agent-exec-test-"));
-		const readyFile = join(testDir, "ready");
-		const controller = new AbortController();
-		let resultPromise: Promise<Awaited<ReturnType<typeof execCommand>>> | undefined;
+describe("execCommand", () => {
+	it.runIf(process.platform !== "win32")(
+		"force kills a process that ignores SIGTERM and cleans up the fallback timer",
+		async () => {
+			const testDir = mkdtempSync(join(tmpdir(), "prime-agent-exec-test-"));
+			const readyFile = join(testDir, "ready");
+			const controller = new AbortController();
+			let resultPromise: Promise<Awaited<ReturnType<typeof execCommand>>> | undefined;
+			try {
+				resultPromise = execCommand(
+					process.execPath,
+					[
+						"-e",
+						`const { writeFileSync } = require("node:fs"); process.on("SIGTERM", () => {}); writeFileSync(process.argv[1], ""); setInterval(() => {}, 1000);`,
+						readyFile,
+					],
+					process.cwd(),
+					{ signal: controller.signal },
+				);
+				await waitForFile(readyFile);
+
+				vi.useFakeTimers();
+				controller.abort();
+
+				await vi.advanceTimersByTimeAsync(5000);
+				const result = await resultPromise;
+
+				expect(result.killed).toBe(true);
+				expect(result.code).toBe(SIGKILL_EXIT_CODE);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+				controller.abort();
+				await resultPromise;
+				rmSync(testDir, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.runIf(process.platform === "win32")("launches a Windows command shim", async () => {
+		const testDir = mkdtempSync(join(tmpdir(), "prime-agent-exec-windows-test-"));
+		const commandPath = join(testDir, "echo shim.cmd");
 		try {
-			resultPromise = execCommand(
-				process.execPath,
-				[
-					"-e",
-					`const { writeFileSync } = require("node:fs"); process.on("SIGTERM", () => {}); writeFileSync(process.argv[1], ""); setInterval(() => {}, 1000);`,
-					readyFile,
-				],
-				process.cwd(),
-				{ signal: controller.signal },
-			);
-			await waitForFile(readyFile);
+			writeFileSync(commandPath, "@echo off\r\necho shim-output\r\n");
+			const result = await execCommand(commandPath, [], process.cwd());
 
-			vi.useFakeTimers();
-			controller.abort();
-
-			await vi.advanceTimersByTimeAsync(5000);
-			const result = await resultPromise;
-
-			expect(result.killed).toBe(true);
-			expect(result.code).toBe(SIGKILL_EXIT_CODE);
-			expect(vi.getTimerCount()).toBe(0);
+			expect(result.code).toBe(0);
+			expect(result.stdout).toContain("shim-output");
+			expect(result.stderr).toBe("");
 		} finally {
-			vi.useRealTimers();
-			controller.abort();
-			await resultPromise;
 			rmSync(testDir, { recursive: true, force: true });
 		}
 	});

@@ -174,34 +174,37 @@ describe("SessionManager.flushNow", () => {
 		);
 	});
 
-	it("rewrites a cross-directory symlink target without replacing the alias", () => {
-		const dir = createTempDir();
-		const targetDir = join(dir, "targets");
-		const aliasDir = join(dir, "aliases");
-		mkdirSync(targetDir);
-		mkdirSync(aliasDir);
-		const target = join(targetDir, "session.jsonl");
-		const alias = join(aliasDir, "session.jsonl");
-		fsMocks.actualWriteFileSync!(
-			target,
-			`${JSON.stringify({
-				type: "session",
-				version: 2,
-				id: "symlink-session",
-				timestamp: "2026-01-01T00:00:00.000Z",
-				cwd: dir,
-			})}\n`,
-		);
-		chmodSync(target, 0o640);
-		symlinkSync(target, alias);
+	it.runIf(process.platform !== "win32")(
+		"rewrites a cross-directory symlink target without replacing the alias",
+		() => {
+			const dir = createTempDir();
+			const targetDir = join(dir, "targets");
+			const aliasDir = join(dir, "aliases");
+			mkdirSync(targetDir);
+			mkdirSync(aliasDir);
+			const target = join(targetDir, "session.jsonl");
+			const alias = join(aliasDir, "session.jsonl");
+			fsMocks.actualWriteFileSync!(
+				target,
+				`${JSON.stringify({
+					type: "session",
+					version: 2,
+					id: "symlink-session",
+					timestamp: "2026-01-01T00:00:00.000Z",
+					cwd: dir,
+				})}\n`,
+			);
+			chmodSync(target, 0o640);
+			symlinkSync(target, alias);
 
-		const mgr = SessionManager.open(alias);
+			const mgr = SessionManager.open(alias);
 
-		expect(mgr.getSessionFile()).toBe(alias);
-		expect(lstatSync(alias).isSymbolicLink()).toBe(true);
-		expect(JSON.parse(readFileSync(target, "utf8")).version).toBe(3);
-		expect(statSync(target).mode & 0o777).toBe(0o640);
-	});
+			expect(mgr.getSessionFile()).toBe(alias);
+			expect(lstatSync(alias).isSymbolicLink()).toBe(true);
+			expect(JSON.parse(readFileSync(target, "utf8")).version).toBe(3);
+			expect(statSync(target).mode & 0o777).toBe(0o640);
+		},
+	);
 
 	it("is a no-op for in-memory (non-persisted) sessions", () => {
 		const mgr = SessionManager.inMemory("/tmp");

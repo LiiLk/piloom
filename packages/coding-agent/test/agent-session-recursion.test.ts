@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Agent, type AgentMessage, type StreamFn } from "@earendil-works/pi-agent-core";
@@ -22,6 +22,7 @@ import {
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import type { LoadExtensionsResult } from "../src/core/extensions/index.js";
+import { getKernelVenvDir, getKernelVenvPythonPath } from "../src/core/kernel/bootstrap.js";
 import { type HostRequestHandlers, KernelManager } from "../src/core/kernel/index.js";
 import { convertToLlm } from "../src/core/messages.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -68,6 +69,20 @@ function usage(input = 7, output = 3): Usage {
 		cost: { input, output, cacheRead: 0, cacheWrite: 0, total: input + output },
 	};
 }
+
+function resolveAvailableKernelPython(): string | undefined {
+	const candidates = [process.env.PRIME_AGENT_KERNEL_PYTHON, getKernelVenvPythonPath(getKernelVenvDir())].filter(
+		(candidate): candidate is string => Boolean(candidate),
+	);
+	for (const candidate of candidates) {
+		if (!existsSync(candidate)) continue;
+		const probe = spawnSync(candidate, ["-c", "import ipykernel"], { encoding: "utf8" });
+		if (probe.status === 0) return candidate;
+	}
+	return undefined;
+}
+
+const availableKernelPython = resolveAvailableKernelPython();
 
 function assistantMessage(text: string, messageUsage = usage()): AssistantMessage {
 	return {
@@ -2136,9 +2151,8 @@ describe("AgentSession rlm recursion", () => {
 		expect(child.rlmMaxDepth).toBe(3);
 	});
 
-	it("lets a stale kernel depth cap defer to the live host gate", () => {
-		const python =
-			process.env.PRIME_AGENT_KERNEL_PYTHON ?? join(homedir(), ".prime", "agent", "kernel-venv", "bin", "python");
+	it.runIf(availableKernelPython !== undefined)("lets a stale kernel depth cap defer to the live host gate", () => {
+		const python = availableKernelPython!;
 		const runtime = join(process.cwd(), "..", "..", "prime-agent-runtime", "src");
 		const probe = spawnSync(
 			python,
@@ -2150,8 +2164,8 @@ describe("AgentSession rlm recursion", () => {
 		);
 
 		expect(probe.status).not.toBe(0);
-		expect(probe.stderr).toContain("Jupyter comm support is unavailable in this kernel");
-		expect(probe.stderr).not.toContain("RLM recursion depth limit reached");
+		expect(probe.stderr ?? "").toContain("Jupyter comm support is unavailable in this kernel");
+		expect(probe.stderr ?? "").not.toContain("RLM recursion depth limit reached");
 	});
 
 	it("rejects child creation at the configured recursion depth cap", async () => {
@@ -3006,25 +3020,28 @@ describe("AgentSession rlm recursion", () => {
 		}
 	});
 
-	it("handles rlm calls from asyncio tasks after the scheduling cell is idle", async () => {
-		const prompts: string[] = [];
-		const manager = new KernelManager({
-			cwd: tempDir,
-			hostHandlers: {
-				"rlm.run": createRlmRunHostHandler(async ({ prompt }) => {
-					prompts.push(prompt);
-					return {
-						rlm_child_id: "sub-detached",
-						name: "detached-worker",
-						session_dir: "/tmp/sub-detached",
-						model: "test/model",
-					};
-				}),
-			},
-		});
+	it.runIf(availableKernelPython !== undefined)(
+		"handles rlm calls from asyncio tasks after the scheduling cell is idle",
+		async () => {
+			const prompts: string[] = [];
+			const manager = new KernelManager({
+				python: availableKernelPython,
+				cwd: tempDir,
+				hostHandlers: {
+					"rlm.run": createRlmRunHostHandler(async ({ prompt }) => {
+						prompts.push(prompt);
+						return {
+							rlm_child_id: "sub-detached",
+							name: "detached-worker",
+							session_dir: "/tmp/sub-detached",
+							model: "test/model",
+						};
+					}),
+				},
+			});
 
-		try {
-			const scheduled = await manager.execute(`
+			try {
+				const scheduled = await manager.execute(`
 import asyncio
 import rlm
 
@@ -3036,21 +3053,22 @@ _task = asyncio.create_task(_delayed_rlm())
 print("scheduled")
 `);
 
-			expect(scheduled.status).toBe("ok");
-			expect(scheduled.stdout.trim()).toBe("scheduled");
-			await waitFor(() => prompts.includes("detached child after idle"));
+				expect(scheduled.status).toBe("ok");
+				expect(scheduled.stdout.trim()).toBe("scheduled");
+				await waitFor(() => prompts.includes("detached child after idle"));
 
-			const finished = await manager.execute(`
+				const finished = await manager.execute(`
 _result = await _task
 print(_result.name)
 `);
 
-			expect(finished.status).toBe("ok");
-			expect(finished.stdout.trim()).toBe("detached-worker");
-		} finally {
-			await manager.dispose();
-		}
-	});
+				expect(finished.status).toBe("ok");
+				expect(finished.stdout.trim()).toBe("detached-worker");
+			} finally {
+				await manager.dispose();
+			}
+		},
+	);
 
 	it("clears active execution when execute_request send fails", async () => {
 		const manager = new KernelManager({ python: process.execPath });
