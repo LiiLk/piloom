@@ -544,19 +544,21 @@ Content`,
 			expect(shouldUseWindowsShell("C:/Program Files/nodejs/npm.cmd")).toBe(true);
 		});
 
-		it("quotes Windows-shell command paths and arguments containing spaces", async () => {
-			const actualPlatform = process.platform;
-			vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-			const pathWithSpaces = join(tempDir, "path with spaces");
-			const npmCommand = actualPlatform === "win32" ? join(dirname(process.execPath), "npm.cmd") : "npm";
-			const managerWithInternals = packageManager as unknown as {
-				runCommandCapture(command: string, args: string[]): Promise<string>;
-			};
+		it.runIf(process.platform === "win32")(
+			"quotes Windows-shell command paths and arguments containing spaces",
+			async () => {
+				vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+				const pathWithSpaces = join(tempDir, "path with spaces");
+				const npmCommand = join(dirname(process.execPath), "npm.cmd");
+				const managerWithInternals = packageManager as unknown as {
+					runCommandCapture(command: string, args: string[]): Promise<string>;
+				};
 
-			await expect(
-				managerWithInternals.runCommandCapture(npmCommand, ["prefix", "--prefix", pathWithSpaces]),
-			).resolves.toBe(pathWithSpaces);
-		});
+				await expect(
+					managerWithInternals.runCommandCapture(npmCommand, ["prefix", "--prefix", pathWithSpaces]),
+				).resolves.toBe(pathWithSpaces);
+			},
+		);
 	});
 
 	describe("npmCommand", () => {

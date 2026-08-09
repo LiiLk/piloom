@@ -249,7 +249,7 @@ describe("kernel bootstrap", () => {
 	it("discovers uv from a Windows user executable directory", async () => {
 		const uvPath = join(tempDir, ".local", "bin", "uv.exe");
 		mkdirSync(join(tempDir, ".local", "bin"), { recursive: true });
-		writeFileSync(uvPath, "installed uv\n");
+		writeExecutable(uvPath, "installed uv\n");
 		process.env.UV_INSTALL_DIR = join(tempDir, ".local", "bin");
 		process.env.PATH = "";
 		const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
