@@ -312,7 +312,7 @@ describe("owned session worker processes", () => {
 		frontendPids.add(frontendPid);
 		expect(Number(readFileSync(`${pidPath}.ppid`, "utf8").trim())).toBe(frontendPid);
 
-		frontend.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+		process.kill(frontendPid, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
 		await waitForExit(frontend);
 		children.delete(frontend);
 		frontendPids.delete(frontendPid);

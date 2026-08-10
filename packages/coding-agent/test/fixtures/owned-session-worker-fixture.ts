@@ -17,11 +17,11 @@ if (process.env.PRIME_AGENT_INTERNAL_OWNED_WORKER === "1") {
 	if (pidPath) {
 		writeFileSync(`${pidPath}.ppid`, `${process.ppid}\n`);
 		writeFileSync(`${pidPath}.profile`, `${process.env.PRIME_AGENT_INTERNAL_OWNED_PROFILE ?? ""}\n`);
+		writeFileSync(pidPath, `${process.pid}\n`);
 		process.once("SIGTERM", () => {
 			writeFileSync(`${pidPath}.terminated`, "terminated\n");
 			process.exit(0);
 		});
-		writeFileSync(pidPath, `${process.pid}\n`);
 	}
 	if (process.env.PRIME_AGENT_TEST_KEEP_ALIVE === "1") {
 		setInterval(() => {}, 1000);
