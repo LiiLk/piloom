@@ -24,6 +24,13 @@ interface DataBlobValue {
 	pbData: unknown;
 }
 
+interface WindowsProcessInformation {
+	hProcess: unknown;
+	hThread: unknown;
+	dwProcessId: number;
+	dwThreadId: number;
+}
+
 const kernel32 = process.platform === "win32" ? koffi.load("kernel32.dll") : undefined;
 const crypt32 = process.platform === "win32" ? koffi.load("crypt32.dll") : undefined;
 
@@ -201,8 +208,22 @@ export function spawnDetachedWindowsProcess(options: {
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 }): number {
-	if (process.platform !== "win32" || !createProcess || !closeHandle) {
-		throw new Error("Windows detached process creation is unavailable");
+	if (!closeHandle) throw new Error("Windows detached process creation is unavailable");
+	const processInformation = launchWindowsProcess(
+		options,
+		CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+	);
+	closeHandle(processInformation.hThread);
+	closeHandle(processInformation.hProcess);
+	return processInformation.dwProcessId;
+}
+
+function launchWindowsProcess(
+	options: { command: string; args: readonly string[]; cwd: string; env: NodeJS.ProcessEnv },
+	creationFlags: number,
+): WindowsProcessInformation {
+	if (process.platform !== "win32" || !createProcess) {
+		throw new Error("Windows process creation is unavailable");
 	}
 	const commandLine = Buffer.from(
 		`${[options.command, ...options.args].map(quoteWindowsProcessArgument).join(" ")}\0`,
@@ -229,9 +250,12 @@ export function spawnDetachedWindowsProcess(options: {
 		hStdOutput: null,
 		hStdError: null,
 	};
-	const processInformation = { hProcess: null, hThread: null, dwProcessId: 0, dwThreadId: 0 };
-	const creationFlags =
-		CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
+	const processInformation: WindowsProcessInformation = {
+		hProcess: null,
+		hThread: null,
+		dwProcessId: 0,
+		dwThreadId: 0,
+	};
 	if (
 		!createProcess(
 			options.command,
@@ -248,9 +272,7 @@ export function spawnDetachedWindowsProcess(options: {
 	) {
 		throw new Error(`CreateProcessW failed with Win32 error ${getLastError?.() ?? "unknown"}`);
 	}
-	closeHandle(processInformation.hThread);
-	closeHandle(processInformation.hProcess);
-	return processInformation.dwProcessId;
+	return processInformation;
 }
 
 function setWindowsJobLimitFlags(handle: unknown, limitFlags: number): boolean {
@@ -328,6 +350,98 @@ export function getWindowsCurrentUserSid(): string {
 export function windowsDaemonUserKey(sid: string): string {
 	if (!/^S-\d(?:-\d+)+$/i.test(sid)) throw new Error("Invalid Windows user SID");
 	return createHash("sha256").update(sid.toUpperCase()).digest("hex").slice(0, 24);
+}
+
+export async function runWindowsNativeSelfTest(): Promise<void> {
+	if (process.platform !== "win32" || !createJobObject || !assignProcessToJobObject || !closeHandle) {
+		throw new Error("Windows native self-test is only available on Windows");
+	}
+	const sid = getWindowsCurrentUserSid();
+	if (!windowsDaemonUserKey(sid)) throw new Error("Windows SID hashing failed");
+	const secret = randomBytes(32);
+	const entropy = randomBytes(32);
+	const protectedSecret = protectWindowsData(secret, entropy);
+	if (!unprotectWindowsData(protectedSecret, entropy).equals(secret)) {
+		throw new Error("Windows DPAPI round-trip failed during native self-test");
+	}
+
+	const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+	if (!windowsRoot || !isAbsolute(windowsRoot))
+		throw new Error("SystemRoot is unavailable during Windows native self-test");
+	const command = join(windowsRoot, "System32", "cmd.exe");
+	const sleeper = join(windowsRoot, "System32", "ping.exe");
+	if (!existsSync(command) || !existsSync(sleeper)) {
+		throw new Error("Windows native self-test commands are unavailable");
+	}
+
+	const jobHandle = createJobObject(null, null);
+	if (!jobHandle) throw new Error("CreateJobObjectW failed during Windows native self-test");
+	const assignedChild = launchWindowsProcess(
+		{
+			command: sleeper,
+			args: ["-n", "30", "127.0.0.1"],
+			cwd: process.cwd(),
+			env: process.env,
+		},
+		CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+	);
+	closeHandle(assignedChild.hThread);
+	let jobClosed = false;
+	let cleanupError: unknown;
+	try {
+		if (!setWindowsJobLimitFlags(jobHandle, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)) {
+			throw new Error("SetInformationJobObject failed during Windows native self-test");
+		}
+		if (!assignProcessToJobObject(jobHandle, assignedChild.hProcess)) {
+			throw new Error(`AssignProcessToJobObject failed with Win32 error ${getLastError?.() ?? "unknown"}`);
+		}
+		if (!closeHandle(jobHandle)) throw new Error("CloseHandle failed for the Windows native self-test Job Object");
+		jobClosed = true;
+		await waitForWindowsProcessExit(assignedChild.dwProcessId, 3000, "Job Object child");
+	} finally {
+		if (!jobClosed) closeHandle(jobHandle);
+		if (isWindowsProcessAlive(assignedChild.dwProcessId)) {
+			try {
+				process.kill(assignedChild.dwProcessId);
+			} catch (error) {
+				if (isWindowsProcessAlive(assignedChild.dwProcessId)) {
+					cleanupError = new Error(`Unable to terminate native self-test child ${assignedChild.dwProcessId}`, {
+						cause: error,
+					});
+				}
+			}
+		}
+		closeHandle(assignedChild.hProcess);
+	}
+	if (cleanupError) throw cleanupError;
+
+	if (!installWindowsKillOnCloseJob({ allowExplicitBreakaway: true })) {
+		throw new Error("Unable to assign the native self-test process to a breakaway-enabled Job Object");
+	}
+	const childPid = spawnDetachedWindowsProcess({
+		command,
+		args: ["/d", "/s", "/c", "exit", "/b", "0"],
+		cwd: process.cwd(),
+		env: process.env,
+	});
+	await waitForWindowsProcessExit(childPid, 5000, "breakaway child");
+}
+
+async function waitForWindowsProcessExit(pid: number, timeoutMs: number, label: string): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (isWindowsProcessAlive(pid)) {
+		if (Date.now() >= deadline) throw new Error(`${label} ${pid} did not exit`);
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+	}
+}
+
+function isWindowsProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function isWindowsDirectoryCaseSensitive(directory: string): boolean {

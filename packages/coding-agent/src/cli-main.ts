@@ -8,7 +8,7 @@ import {
 } from "./cli/owned-session-worker.js";
 import { APP_NAME } from "./config.js";
 import { isDaemonWorkerProcess } from "./modes/daemon/daemon-worker-protocol.js";
-import { installWindowsKillOnCloseJob } from "./utils/windows-process-security.js";
+import { installWindowsKillOnCloseJob, runWindowsNativeSelfTest } from "./utils/windows-process-security.js";
 
 export async function runCli(): Promise<void> {
 	try {
@@ -20,6 +20,12 @@ export async function runCli(): Promise<void> {
 	process.title = APP_NAME;
 	process.env.PI_CODING_AGENT = "true";
 	process.emitWarning = (() => {}) as typeof process.emitWarning;
+	const args = process.argv.slice(2);
+	if (args.length === 1 && args[0] === "--self-test-windows-native") {
+		await runWindowsNativeSelfTest();
+		console.log("windows-native-self-test: ok");
+		return;
+	}
 
 	installOwnedSessionWorkerOwnerWatch();
 	const daemonWorker = isDaemonWorkerProcess();
@@ -31,7 +37,6 @@ export async function runCli(): Promise<void> {
 		throw new Error("Unable to install the Windows worker Job Object");
 	}
 
-	const args = process.argv.slice(2);
 	const handledByOwnedWorker = await maybeRunOwnedSessionWorkerFrontend(args);
 	if (!handledByOwnedWorker) {
 		if (!isOwnedSessionWorkerProcess()) {

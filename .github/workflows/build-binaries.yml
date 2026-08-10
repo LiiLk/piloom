@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Production release tag to create or update (e.g., v0.0.1)'
+        description: 'Existing production release tag to publish or retry (e.g., v0.0.1)'
         required: true
         type: string
 
@@ -28,6 +28,7 @@ jobs:
       contents: read
     outputs:
       beta_version: ${{ steps.context.outputs.beta_version }}
+      build_commit: ${{ steps.context.outputs.build_commit }}
       build_ref: ${{ steps.context.outputs.build_ref }}
       production_version: ${{ steps.context.outputs.production_version }}
       publish_beta: ${{ steps.context.outputs.publish_beta }}
@@ -65,7 +66,7 @@ jobs:
               exit 1
             fi
             production_version="${INPUT_RELEASE_TAG#v}"
-            build_ref="$GITHUB_SHA_VALUE"
+            build_ref="v${production_version}"
             publish_production=true
           elif [ "$REF_TYPE" = tag ]; then
             production_version="${REF_NAME#v}"
@@ -91,11 +92,12 @@ jobs:
                   exit 1
                 fi
                 echo "Retrying production v${production_version} for ${GITHUB_SHA_VALUE}."
+                publish_production=true
+              else
+                echo "Production v${production_version} is waiting for its immutable tag; publishing beta only."
               fi
-              publish_production=true
             elif ! git show-ref --verify --quiet "refs/tags/v${production_version}"; then
-              echo "Production v${production_version} has no tag; retrying the failed release."
-              publish_production=true
+              echo "Production v${production_version} has no tag; publishing beta only."
             else
               echo "Package version is unchanged at ${production_version}; only beta will advance."
             fi
@@ -106,12 +108,39 @@ jobs:
             exit 1
           fi
 
+          if [ "$publish_production" = true ]; then
+            release_tag="v${production_version}"
+            if ! git show-ref --verify --quiet "refs/tags/${release_tag}"; then
+              echo "Production releases require an existing immutable tag: ${release_tag}" >&2
+              exit 1
+            fi
+            tagged_commit=$(git rev-list -n 1 "$release_tag")
+            build_commit=$(git rev-parse "${build_ref}^{commit}")
+            if [ "$tagged_commit" != "$build_commit" ]; then
+              echo "${release_tag} points to ${tagged_commit}, not requested build ${build_commit}." >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$tagged_commit" "origin/${DEFAULT_BRANCH}"; then
+              echo "${release_tag} does not point to a commit reachable from ${DEFAULT_BRANCH}." >&2
+              exit 1
+            fi
+            tagged_package_version=$(git show "${tagged_commit}:package.json" | node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => console.log(JSON.parse(value).version));')
+            if [ "$tagged_package_version" != "$production_version" ]; then
+              echo "${release_tag} does not match package.json version ${tagged_package_version}." >&2
+              exit 1
+            fi
+            build_ref="$release_tag"
+          fi
+
+          build_commit=$(git rev-parse "${build_ref}^{commit}")
           echo "beta_version=$beta_version" >> "$GITHUB_OUTPUT"
+          echo "build_commit=$build_commit" >> "$GITHUB_OUTPUT"
           echo "build_ref=$build_ref" >> "$GITHUB_OUTPUT"
           echo "production_version=$production_version" >> "$GITHUB_OUTPUT"
           echo "publish_beta=$publish_beta" >> "$GITHUB_OUTPUT"
           echo "publish_production=$publish_production" >> "$GITHUB_OUTPUT"
           echo "Build ref: $build_ref"
+          echo "Build commit: $build_commit"
           echo "Production: $publish_production ${production_version:+v${production_version}}"
           echo "Beta: $publish_beta ${beta_version:+v${beta_version}}"
 
@@ -227,6 +256,11 @@ jobs:
       - name: Check
         run: npm.cmd run check
 
+      - name: Test built extension loading
+        working-directory: packages/coding-agent
+        run: |
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/resource-loader.test.ts test/extensions-discovery.test.ts test/extensions-runner.test.ts test/daemon-extension-binding.test.ts test/project-trust-settings.test.ts test/trust-manager.test.ts
+
       - name: Test kernel and lifecycle paths
         working-directory: packages/coding-agent
         run: |
@@ -267,6 +301,8 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.3.12'
 
       - name: Install dependencies
         run: npm.cmd ci
@@ -291,13 +327,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [release-context, build, windows-verify, windows-binary]
+    environment: release
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_DEFAULT_REGION: auto
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       BETA_VERSION: ${{ needs.release-context.outputs.beta_version }}
+      BUILD_COMMIT: ${{ needs.release-context.outputs.build_commit }}
       BUILD_REF: ${{ needs.release-context.outputs.build_ref }}
       PRODUCTION_VERSION: ${{ needs.release-context.outputs.production_version }}
       PUBLISH_BETA: ${{ needs.release-context.outputs.publish_beta }}
@@ -332,6 +372,22 @@ jobs:
           name: piloom-windows-x64
           path: release-artifacts/windows
 
+      - name: Sign release checksums
+        env:
+          PILOOM_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.PILOOM_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          test -n "$PILOOM_RELEASE_SIGNING_PRIVATE_KEY"
+          if [ "$PUBLISH_PRODUCTION" = true ]; then
+            node scripts/sign-release-checksums.mjs --channel stable --version "$PRODUCTION_VERSION" \
+              "release-artifacts/production/SHA256SUMS" \
+              "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"
+          fi
+          if [ "$PUBLISH_BETA" = true ]; then
+            node scripts/sign-release-checksums.mjs --channel beta --version "$BETA_VERSION" \
+              "release-artifacts/beta/SHA256SUMS" \
+              "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256"
+          fi
+
       - name: Prepare installer
         run: |
           INSTALL_BASE_URL="${R2_PUBLIC_BASE_URL%/}"
@@ -350,11 +406,32 @@ jobs:
           const renderPowerShellInstaller = (channel) => powershellInstaller
             .replaceAll("__PRIME_AGENT_DOWNLOAD_BASE_URL__", baseUrl)
             .replaceAll("__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__", channel);
-          fs.writeFileSync("/tmp/prime-agent-install.sh", renderInstaller("stable"));
-          fs.writeFileSync("/tmp/prime-agent-install-beta.sh", renderInstaller("beta"));
-          fs.writeFileSync("/tmp/prime-agent-install.ps1", renderPowerShellInstaller("stable"));
-          fs.writeFileSync("/tmp/prime-agent-install-beta.ps1", renderPowerShellInstaller("beta"));
+          fs.mkdirSync("release-artifacts/installers", { recursive: true });
+          fs.writeFileSync("release-artifacts/installers/install.sh", renderInstaller("stable"));
+          fs.writeFileSync("release-artifacts/installers/install-beta.sh", renderInstaller("beta"));
+          fs.writeFileSync("release-artifacts/installers/install.ps1", renderPowerShellInstaller("stable"));
+          fs.writeFileSync("release-artifacts/installers/install-beta.ps1", renderPowerShellInstaller("beta"));
           NODE
+
+      - name: Attest production artifacts
+        if: env.PUBLISH_PRODUCTION == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            release-artifacts/production/*.tgz
+            release-artifacts/windows/piloom-${{ needs.release-context.outputs.production_version }}-windows-x64.zip
+            release-artifacts/installers/install.sh
+            release-artifacts/installers/install.ps1
+
+      - name: Attest beta artifacts
+        if: env.PUBLISH_BETA == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            release-artifacts/beta/*.tgz
+            release-artifacts/windows/piloom-${{ needs.release-context.outputs.beta_version }}-windows-x64.zip
+            release-artifacts/installers/install-beta.sh
+            release-artifacts/installers/install-beta.ps1
 
       - name: Extract production release notes
         if: env.PUBLISH_PRODUCTION == 'true'
@@ -364,7 +441,67 @@ jobs:
             echo "Release v${PRODUCTION_VERSION}" > /tmp/release-notes.md
           fi
 
-      - name: Publish production channel to R2
+      - name: Preflight immutable production artifacts
+        if: env.PUBLISH_PRODUCTION == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRODUCTION_DIR=release-artifacts/production
+          RELEASE_PREFIX="releases/v${PRODUCTION_VERSION}"
+          RELEASE_TAG="v${PRODUCTION_VERSION}"
+          release_assets=(
+            "$PRODUCTION_DIR"/*
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip"
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256.sig"
+            "release-artifacts/installers/install.sh"
+            "release-artifacts/installers/install.ps1"
+          )
+
+          test -n "$R2_BUCKET"
+          test -n "$R2_ENDPOINT_URL"
+          for artifact in "$PRODUCTION_DIR"/*.tgz "$PRODUCTION_DIR/SHA256SUMS" "$PRODUCTION_DIR/SHA256SUMS.sig" \
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" \
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256" \
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256.sig"; do
+            test -f "$artifact"
+            object_key="${RELEASE_PREFIX}/$(basename "$artifact")"
+            head_error=$(mktemp)
+            if aws s3api head-object --bucket "$R2_BUCKET" --key "$object_key" --endpoint-url "$R2_ENDPOINT_URL" >/dev/null 2>"$head_error"; then
+              existing=$(mktemp)
+              aws s3 cp "s3://${R2_BUCKET}/${object_key}" "$existing" --endpoint-url "$R2_ENDPOINT_URL" >/dev/null
+              if ! cmp -s "$artifact" "$existing"; then
+                rm -f "$existing" "$head_error"
+                echo "Refusing to replace immutable R2 object with different bytes: ${object_key}" >&2
+                exit 1
+              fi
+              rm -f "$existing"
+            elif ! grep -Eq '\((404|NoSuchKey|NotFound)\)' "$head_error"; then
+              cat "$head_error" >&2
+              rm -f "$head_error"
+              echo "Unable to prove that immutable R2 object is absent: ${object_key}" >&2
+              exit 1
+            fi
+            rm -f "$head_error"
+          done
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            for artifact in "${release_assets[@]}"; do
+              asset_name=$(basename "$artifact")
+              if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq ".assets[] | select(.name == \"${asset_name}\") | .id" | grep -q .; then
+                existing_dir=$(mktemp -d)
+                gh release download "$RELEASE_TAG" --pattern "$asset_name" --dir "$existing_dir"
+                if ! cmp -s "$artifact" "$existing_dir/$asset_name"; then
+                  rm -rf "$existing_dir"
+                  echo "Refusing to replace immutable GitHub release asset with different bytes: ${asset_name}" >&2
+                  exit 1
+                fi
+                rm -rf "$existing_dir"
+              fi
+            done
+          fi
+
+      - name: Publish immutable production artifacts to R2
         if: env.PUBLISH_PRODUCTION == 'true'
         run: |
           PRODUCTION_DIR=release-artifacts/production
@@ -390,6 +527,61 @@ jobs:
             --content-type text/plain \
             --cache-control 'public, max-age=31536000, immutable'
 
+          aws s3 cp "$PRODUCTION_DIR/SHA256SUMS.sig" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/SHA256SUMS.sig" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
+            --cache-control 'public, max-age=31536000, immutable'
+
+          for artifact in "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256.sig"; do
+            test -f "$artifact"
+            aws s3 cp "$artifact" "s3://${R2_BUCKET}/releases/v${PRODUCTION_VERSION}/$(basename "$artifact")" \
+              --endpoint-url "$R2_ENDPOINT_URL" \
+              --cache-control 'public, max-age=31536000, immutable'
+          done
+
+      - name: Create production GitHub release
+        if: env.PUBLISH_PRODUCTION == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="v${PRODUCTION_VERSION}"
+          PRODUCTION_DIR=release-artifacts/production
+          release_assets=(
+            "$PRODUCTION_DIR"/*
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip"
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"
+            "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256.sig"
+            "release-artifacts/installers/install.sh"
+            "release-artifacts/installers/install.ps1"
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            for asset in "${release_assets[@]}"; do
+              asset_name=$(basename "$asset")
+              if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq ".assets[] | select(.name == \"${asset_name}\") | .id" | grep -q .; then
+                existing_dir=$(mktemp -d)
+                gh release download "$RELEASE_TAG" --pattern "$asset_name" --dir "$existing_dir"
+                if ! cmp -s "$asset" "$existing_dir/$asset_name"; then
+                  rm -rf "$existing_dir"
+                  echo "Refusing to replace immutable GitHub release asset with different bytes: ${asset_name}" >&2
+                  exit 1
+                fi
+                rm -rf "$existing_dir"
+              else
+                gh release upload "$RELEASE_TAG" "$asset"
+              fi
+            done
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file /tmp/release-notes.md \
+              "${release_assets[@]}"
+          fi
+
+      - name: Advance production release
+        if: env.PUBLISH_PRODUCTION == 'true'
+        run: |
+          PRODUCTION_DIR=release-artifacts/production
           aws s3 cp "$PRODUCTION_DIR/latest.json" "s3://${R2_BUCKET}/latest.json" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type application/json \
@@ -400,54 +592,25 @@ jobs:
             --content-type text/plain \
             --cache-control no-cache
 
-          for artifact in "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"; do
-            test -f "$artifact"
-            aws s3 cp "$artifact" "s3://${R2_BUCKET}/releases/v${PRODUCTION_VERSION}/$(basename "$artifact")" \
-              --endpoint-url "$R2_ENDPOINT_URL" \
-              --cache-control 'public, max-age=31536000, immutable'
-          done
-
-          aws s3 cp /tmp/prime-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
+          aws s3 cp release-artifacts/installers/install.sh "s3://${R2_BUCKET}/install.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
+          aws s3 cp release-artifacts/installers/install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install.ps1 "s3://${R2_BUCKET}/install.ps1" \
+          aws s3 cp release-artifacts/installers/install.ps1 "s3://${R2_BUCKET}/install.ps1" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
+          aws s3 cp release-artifacts/installers/install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
             --cache-control no-cache
-
-      - name: Create production GitHub release
-        if: env.PUBLISH_PRODUCTION == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          RELEASE_TAG="v${PRODUCTION_VERSION}"
-          PRODUCTION_DIR=release-artifacts/production
-          target_args=()
-          if [ "$BUILD_REF" != "$RELEASE_TAG" ]; then
-            target_args=(--target "$BUILD_REF")
-          fi
-
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256" --clobber
-          else
-            gh release create "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              "${target_args[@]}" \
-              --notes-file /tmp/release-notes.md \
-              "$PRODUCTION_DIR"/* "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"
-          fi
 
       - name: Publish immutable beta artifacts to R2
         if: env.PUBLISH_BETA == 'true'
@@ -470,7 +633,7 @@ jobs:
               --cache-control 'public, max-age=31536000, immutable'
           done
 
-          for artifact in "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256"; do
+          for artifact in "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256.sig"; do
             test -f "$artifact"
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
@@ -482,6 +645,11 @@ jobs:
             --content-type text/plain \
             --cache-control 'public, max-age=31536000, immutable'
 
+          aws s3 cp "$BETA_DIR/SHA256SUMS.sig" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/SHA256SUMS.sig" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
+            --cache-control 'public, max-age=31536000, immutable'
+
       - name: Advance beta release
         if: env.PUBLISH_BETA == 'true'
         env:
@@ -489,7 +657,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           latest_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)
-          if [ "$latest_main_sha" != "$BUILD_REF" ]; then
+          if [ "$latest_main_sha" != "$BUILD_COMMIT" ]; then
             echo "A newer main commit exists; keeping its beta pointers in place."
             exit 0
           fi
@@ -505,36 +673,36 @@ jobs:
             --content-type text/plain \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install.sh "s3://${R2_BUCKET}/install.sh" \
+          aws s3 cp release-artifacts/installers/install.sh "s3://${R2_BUCKET}/install.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
+          aws s3 cp release-artifacts/installers/install-beta.sh "s3://${R2_BUCKET}/install-beta.sh" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/x-shellscript \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install.ps1 "s3://${R2_BUCKET}/install.ps1" \
+          aws s3 cp release-artifacts/installers/install.ps1 "s3://${R2_BUCKET}/install.ps1" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
             --cache-control no-cache
 
-          aws s3 cp /tmp/prime-agent-install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
+          aws s3 cp release-artifacts/installers/install-beta.ps1 "s3://${R2_BUCKET}/install-beta.ps1" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type text/plain \
             --cache-control no-cache
 
-          printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_REF" > /tmp/beta-release-notes.md
+          printf 'Automated beta build from `%s` (`%s`).\n' "$DEFAULT_BRANCH" "$BUILD_COMMIT" > /tmp/beta-release-notes.md
 
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/beta" >/dev/null 2>&1; then
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/beta" \
-              -F sha="$BUILD_REF" \
+              -F sha="$BUILD_COMMIT" \
               -F force=true >/dev/null
           else
             gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
               -f ref=refs/tags/beta \
-              -f sha="$BUILD_REF" >/dev/null
+              -f sha="$BUILD_COMMIT" >/dev/null
           fi
 
           if release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/beta" --jq .id 2>/dev/null); then
@@ -543,16 +711,16 @@ jobs:
             done
             gh release edit beta \
               --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
+              --target "$BUILD_COMMIT" \
               --notes-file /tmp/beta-release-notes.md \
               --prerelease
           else
             gh release create beta \
               --title "Beta (v${BETA_VERSION})" \
-              --target "$BUILD_REF" \
+              --target "$BUILD_COMMIT" \
               --notes-file /tmp/beta-release-notes.md \
               --prerelease
           fi
 
-          gh release upload beta "$BETA_DIR"/* --clobber
+          gh release upload beta "$BETA_DIR"/* "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256.sig" "release-artifacts/installers/install-beta.sh" "release-artifacts/installers/install-beta.ps1" --clobber
           echo "Beta installer: ${R2_PUBLIC_BASE_URL%/}/install-beta.sh"

@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { shutdownDaemonAndWait } from "../src/cli/daemon-launch.js";
 import { ENV_AGENT_DIR } from "../src/config.js";
 
 /**
@@ -27,7 +28,7 @@ afterEach(async () => {
 		await new Promise<void>((done) => server.close(() => done()));
 	}
 	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true, maxRetries: 100, retryDelay: 100 });
 	}
 });
 
@@ -54,6 +55,7 @@ async function driveAcpTurn(baseUrl: string): Promise<AcpResult> {
 	tempDirs.push(tempRoot);
 	const agentDir = join(tempRoot, "agent");
 	const projectDir = join(tempRoot, "project");
+	const daemonSocket = process.platform === "win32" ? `\\\\.\\pipe\\${basename(tempRoot)}` : join(tempRoot, "d.sock");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(projectDir, { recursive: true });
 	writeFileSync(
@@ -84,8 +86,9 @@ async function driveAcpTurn(baseUrl: string): Promise<AcpResult> {
 			"cold/test-model",
 			"--no-session",
 			"--offline",
+			"--approve",
 			"--daemon-socket",
-			join(tempRoot, "d.sock"),
+			daemonSocket,
 		],
 		{
 			cwd: projectDir,
@@ -102,8 +105,13 @@ async function driveAcpTurn(baseUrl: string): Promise<AcpResult> {
 	const responses: Record<string, unknown>[] = [];
 	let updates = 0;
 	let buffer = "";
+	let stderr = "";
+	child.stderr.on("data", (chunk) => {
+		stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+	});
 
 	const send = (payload: unknown) => child.stdin.write(`${JSON.stringify(payload)}\n`);
+	let teardownError: Error | undefined;
 
 	const done = new Promise<void>((resolveDone) => {
 		child.stdout.on("data", (chunk) => {
@@ -156,7 +164,9 @@ async function driveAcpTurn(baseUrl: string): Promise<AcpResult> {
 	try {
 		await Promise.race([
 			done,
-			new Promise<void>((_, reject) => setTimeout(() => reject(new Error("ACP turn timed out")), 150_000)),
+			new Promise<void>((_, reject) =>
+				setTimeout(() => reject(new Error(`ACP turn timed out. stderr: ${stderr || "<empty>"}`)), 60_000),
+			),
 		]);
 	} finally {
 		// SIGKILL alone would strand whatever the CLI started for this socket (a
@@ -179,9 +189,18 @@ async function driveAcpTurn(baseUrl: string): Promise<AcpResult> {
 				exited.then(() => true),
 				new Promise<boolean>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 5_000)),
 			]);
-			if (!stoppedInTime) child.kill("SIGKILL");
+			if (!stoppedInTime) {
+				child.kill("SIGKILL");
+				const killedInTime = await Promise.race([
+					exited.then(() => true),
+					new Promise<boolean>((resolveTimeout) => setTimeout(() => resolveTimeout(false), 5_000)),
+				]);
+				if (!killedInTime) teardownError = new Error("ACP child did not exit after SIGKILL");
+			}
 		}
+		await shutdownDaemonAndWait(daemonSocket, 5000);
 	}
+	if (teardownError) throw teardownError;
 	return { responses, updates };
 }
 

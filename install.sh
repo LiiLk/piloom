@@ -15,6 +15,9 @@ fi
 prime_agent_release_channel="${PRIME_AGENT_RELEASE_CHANNEL:-$prime_agent_default_release_channel}"
 prime_agent_package="${PRIME_AGENT_PACKAGE:-prime-agent}"
 prime_agent_cmd="${PRIME_AGENT_CMD:-piloom}"
+prime_agent_release_signing_key_id="piloom-release-2026-08"
+prime_agent_release_signing_modulus="xVa8-RGteyJqLVxbCg6Grp3awVN1ROmGWLpnQr2FUuAnq6WO-vY5jHABxpFhBZZDdzLmfJuy9LYikL8hLpHvuL8ip9LWHHhE6-AkDjdVYW0x5AWezdKHhf-1qxtwMeGxBJFwhbrMlwZL6qM140c_aH-RRivHWmRhUTignNhvn_AJiuZmm23yDK3FqqEC7QEnXabyreg4cPMfxHHMyklkowTHOz3gcSnxSj2cYgC9EFNtWqJZHk0deT77ZmaZ5De7pAEkQnqrn7zmQCc2k9-Rgg1jiAd7re6iH1RFNwmNysgaVGQz9lIKzAw3AslJKyunmrlvAXI8UMJBdDoU2YGtZ6HiLWyKrapw--ozFHGuJvgQWDQxfKQrTu9-Nc7cvkPblEu1jNV_dYPHINAoVkJboChkEA16Mz05yYL2alrEZ9SHBrY8nbqR8Tnw7Go8kY5dV_3QsdfxT_Ny89aI9whaTWsHWwCfREWoCkirgRdV0WGXMTRJ28ap9qdJcMa5Regb"
+prime_agent_release_signing_exponent="AQAB"
 prime_agent_esc=$(printf '\033')
 prime_agent_original_path="${PATH:-}"
 prime_agent_reset="${prime_agent_esc}[0m"
@@ -33,7 +36,7 @@ prime_agent_color_dim="${prime_agent_esc}[38;2;113;113;122m"
 prime_agent_color_primary="${prime_agent_esc}[38;2;127;91;213m"
 prime_agent_color_scan="${prime_agent_esc}[38;2;14;165;233m"
 prime_agent_color_warning="${prime_agent_esc}[38;2;245;158;11m"
-readonly prime_agent_unconfigured_base_url prime_agent_unconfigured_default_release_channel prime_agent_base_url prime_agent_default_release_channel prime_agent_release_channel prime_agent_package prime_agent_cmd prime_agent_esc prime_agent_original_path
+readonly prime_agent_unconfigured_base_url prime_agent_unconfigured_default_release_channel prime_agent_base_url prime_agent_default_release_channel prime_agent_release_channel prime_agent_package prime_agent_cmd prime_agent_release_signing_key_id prime_agent_release_signing_modulus prime_agent_release_signing_exponent prime_agent_esc prime_agent_original_path
 readonly prime_agent_reset prime_agent_bold prime_agent_italic prime_agent_hide_cursor prime_agent_show_cursor prime_agent_home_cursor prime_agent_clear_screen prime_agent_clear_line
 readonly prime_agent_sync_start prime_agent_sync_end
 readonly prime_agent_color_text prime_agent_color_muted prime_agent_color_dim prime_agent_color_primary prime_agent_color_scan prime_agent_color_warning
@@ -1459,6 +1462,8 @@ download_prime_agent_package() {
 	tarball_name=$(basename "$tarball_path")
 	checksums_url="$prime_agent_base_url/releases/v$version/SHA256SUMS"
 	checksums_path="$download_dir/SHA256SUMS"
+	signature_url="$checksums_url.sig"
+	signature_path="$checksums_path.sig"
 
 	if ! command -v curl >/dev/null 2>&1; then
 		printf 'error: curl is required to download PiLoom.\n' >&2
@@ -1470,6 +1475,16 @@ download_prime_agent_package() {
 		"Downloading release checksums" \
 		"PiLoom v$version" \
 		curl -fsSL "$checksums_url" -o "$checksums_path"
+	prime_agent_run_quiet_with_animation \
+		"Downloading release signature" \
+		"Downloading signed release metadata" \
+		"PiLoom v$version" \
+		curl -fsSL "$signature_url" -o "$signature_path"
+	prime_agent_run_quiet_with_animation \
+		"Verifying release signature" \
+		"Authenticating release checksums" \
+		"PiLoom v$version" \
+		verify_prime_agent_release_signature "$checksums_path" "$signature_path" "$version" "$prime_agent_release_channel"
 
 	prime_agent_run_quiet_with_animation \
 		"Downloading PiLoom" \
@@ -1478,6 +1493,38 @@ download_prime_agent_package() {
 		curl -fsSL "$tarball_url" -o "$tarball_path"
 
 	verify_prime_agent_package_checksum "$checksums_path" "$tarball_path"
+}
+
+verify_prime_agent_release_signature() {
+	checksums_path="$1"
+	signature_path="$2"
+	expected_version="$3"
+	expected_channel="$4"
+	PRIME_AGENT_RELEASE_SIGNING_KEY_ID="$prime_agent_release_signing_key_id" \
+		PRIME_AGENT_RELEASE_SIGNING_MODULUS="$prime_agent_release_signing_modulus" \
+		PRIME_AGENT_RELEASE_SIGNING_EXPONENT="$prime_agent_release_signing_exponent" \
+		node -e '
+			const crypto = require("node:crypto");
+			const fs = require("node:fs");
+			const [checksumsPath, signaturePath, expectedVersion, expectedChannel] = process.argv.slice(1);
+			const rawEnvelope = fs.readFileSync(signaturePath);
+			if (rawEnvelope.length > 16384) throw new Error("Release signature envelope is too large");
+			const envelope = JSON.parse(rawEnvelope.toString("utf8"));
+			if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw new Error("Release signature envelope must be an object");
+			const fields = Object.keys(envelope).sort();
+			if (fields.join(",") !== "algorithm,channel,keyId,releaseVersion,signature,version") throw new Error("Release signature envelope has unexpected fields");
+			if (envelope.version !== 1) throw new Error(`Unsupported release signature version: ${envelope.version}`);
+			if (envelope.keyId !== process.env.PRIME_AGENT_RELEASE_SIGNING_KEY_ID) throw new Error(`Unexpected release signing key: ${envelope.keyId}`);
+			if (envelope.algorithm !== "RSA-SHA256") throw new Error(`Unsupported release signature algorithm: ${envelope.algorithm}`);
+			if (envelope.channel !== expectedChannel) throw new Error(`Unexpected release channel: ${envelope.channel}`);
+			if (envelope.releaseVersion !== expectedVersion) throw new Error(`Unexpected signed release version: ${envelope.releaseVersion}`);
+			if (typeof envelope.signature !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.signature)) throw new Error("Release signature is not valid base64");
+			const signature = Buffer.from(envelope.signature, "base64");
+			if (signature.toString("base64") !== envelope.signature) throw new Error("Release signature is not canonical base64");
+			const publicKey = crypto.createPublicKey({ key: { kty: "RSA", n: process.env.PRIME_AGENT_RELEASE_SIGNING_MODULUS, e: process.env.PRIME_AGENT_RELEASE_SIGNING_EXPONENT }, format: "jwk" });
+			const payload = Buffer.concat([Buffer.from(`piloom-release-signature-v1\0${expectedChannel}\0${expectedVersion}\0`, "utf8"), fs.readFileSync(checksumsPath)]);
+			if (!crypto.verify("RSA-SHA256", payload, publicKey, signature)) throw new Error(`Release signature verification failed for ${checksumsPath}`);
+		' "$checksums_path" "$signature_path" "$expected_version" "$expected_channel"
 }
 
 verify_prime_agent_package_checksum() {

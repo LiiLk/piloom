@@ -76,6 +76,7 @@ function createHarness(
 		workers: new Map(),
 		clients: new Set(),
 		protocolClientIds: new WeakMap(),
+		windowsAuthenticationChallenges: new WeakMap(),
 		windowsAuthenticationTimeouts: new Map(),
 		promptAdmissions: new Map(),
 		mutationDrain: new MutationDrainLatch(),

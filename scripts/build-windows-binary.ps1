@@ -12,6 +12,16 @@ function Invoke-Checked([string]$Command, [string[]]$Arguments) {
 	}
 }
 
+function Get-RequiredApplication([string]$Name) {
+	$application = @(Get-Command $Name -All -ErrorAction SilentlyContinue) |
+		Where-Object { $_.CommandType -eq "Application" } |
+		Select-Object -First 1
+	if (-not $application) {
+		throw "$Name is required to build the Windows binary."
+	}
+	return $application.Source
+}
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 $packageDirectory = Join-Path $repoRoot "packages\coding-agent"
@@ -26,6 +36,12 @@ $outputRoot = if ($OutputDirectory) {
 $archiveName = if ($Version) { "piloom-$Version-windows-x64.zip" } else { "piloom-windows-x64.zip" }
 $archivePath = Join-Path $outputRoot $archiveName
 $originalPackageJsonBytes = $null
+$bunCommand = Get-RequiredApplication "bun"
+$expectedBunVersion = "1.3.12"
+$actualBunVersion = (& $bunCommand --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $actualBunVersion -ne $expectedBunVersion) {
+	throw "Bun $expectedBunVersion is required to build the Windows binary; found '$actualBunVersion'."
+}
 
 Push-Location $repoRoot
 try {
@@ -45,7 +61,11 @@ try {
 		Invoke-Checked "npm.cmd" @("--prefix", $workspacePackage, "run", "build")
 	}
 	Invoke-Checked "npm.cmd" @("--prefix", $packageDirectory, "run", "build")
-	Invoke-Checked "bun" @(
+	$binaryPath = Join-Path $distDirectory "piloom.exe"
+	if (Test-Path -LiteralPath $binaryPath) {
+		Remove-Item -LiteralPath $binaryPath -Force
+	}
+	Invoke-Checked $bunCommand @(
 		"build",
 		"--compile",
 		"--external",
@@ -57,13 +77,8 @@ try {
 	)
 	Invoke-Checked "npm.cmd" @("--prefix", $packageDirectory, "run", "copy-binary-assets")
 
-	$binaryCandidates = @(
-		(Join-Path $distDirectory "piloom.exe"),
-		(Join-Path $distDirectory "piloom")
-	)
-	$binaryPath = $binaryCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-	if (-not $binaryPath) {
-		throw "Bun did not produce a Windows executable in $distDirectory."
+	if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+		throw "Bun did not produce the expected Windows executable: $binaryPath"
 	}
 
 	if (Test-Path -LiteralPath $stageDirectory) {
@@ -101,12 +116,20 @@ try {
 		if (-not (Test-Path -LiteralPath $smokeBinary -PathType Leaf)) {
 			throw "The extracted Windows archive is missing the executable."
 		}
+		$smokeKoffiBinding = Join-Path $smokeDirectory "node_modules\koffi\build\koffi\win32_x64\koffi.node"
+		if (-not (Test-Path -LiteralPath $smokeKoffiBinding -PathType Leaf)) {
+			throw "The extracted Windows archive is missing the koffi native binding."
+		}
 		$reportedVersion = (& $smokeBinary --version | Out-String).Trim()
 		if ($LASTEXITCODE -ne 0) {
 			throw "Windows binary --version failed with exit code $LASTEXITCODE."
 		}
 		if ($Version -and $reportedVersion -ne $Version) {
 			throw "Windows binary reported v$reportedVersion; expected v$Version."
+		}
+		$nativeSelfTest = (& $smokeBinary --self-test-windows-native | Out-String).Trim()
+		if ($LASTEXITCODE -ne 0 -or $nativeSelfTest -ne "windows-native-self-test: ok") {
+			throw "Windows binary native self-test failed: $nativeSelfTest"
 		}
 	} finally {
 		if (Test-Path -LiteralPath $smokeDirectory) {

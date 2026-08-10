@@ -11,10 +11,12 @@
 - Fixed Windows owned-session disposal during supervisor replacement and suppressed consoles for noninteractive process probes and supervisor test children.
 - Fixed remaining noninteractive Windows fallbacks opening consoles during config resolution, clipboard use, OAuth browser launch, and GitHub sharing.
 - Fixed Windows Git Bash child environments so shell utilities remain available to bash tools and command-backed credentials.
-- Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by an exact native `--version` smoke test; release jobs now publish only assets built for the requested version.
+- Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by exact version and native ABI self-tests; release jobs now publish only assets built for the requested version.
 - Added fail-closed, mutually authenticated per-user Windows daemon pipes, socket-bound client identities, and DPAPI-protected persisted worker credentials.
 - Added Job Object cleanup for frontend-owned worker process trees, explicit daemon replacement breakaway, and kernel teardown that waits for observed process exit before removing state.
+- Fixed daemon catalog shutdown waiting for its subprocess to exit, preventing Windows ACP cleanup from leaving locked project directories.
 - Hardened the Windows installer to reject HTTP and redirected downloads instead of trusting hashes fetched through a downgraded transport.
+- Added channel- and version-bound signed release manifests plus GitHub build-provenance attestations, with protected release approval and installers rejecting unsigned, substituted, or tampered releases.
 - Fixed Windows command shims preserving arguments through `cmd.exe` without allowing metacharacter injection.
 - Fixed custom uv install directories and session leases in case-sensitive Windows directories.
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).

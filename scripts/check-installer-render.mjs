@@ -13,9 +13,12 @@ const syncEnd = "\x1b[?2026l";
 const failures = [];
 
 check(installerSource.includes('prime_agent_cmd="${PRIME_AGENT_CMD:-piloom}"'), "POSIX installer must expose piloom as the default command");
+check(installerSource.includes("verify_prime_agent_release_signature"), "POSIX installer must verify signed release checksums");
+check(installerSource.includes('signature_url="$checksums_url.sig"'), "POSIX installer must download the release signature");
 checkPowerShellInstaller(powershellInstallerSource);
 
 if (isWindows) {
+	checkPowerShellSignatureFixture(powershellInstallerSource);
 	if (failures.length > 0) {
 		console.error(["Installer check failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"));
 		process.exit(1);
@@ -320,6 +323,17 @@ function checkPowerShellInstaller(source) {
 	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
 	check(source.includes("MaximumRedirection = 0"), "PowerShell installer must reject download redirects");
 	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
+	check(source.includes('"$baseUrl/releases/v$version/SHA256SUMS.sig"'), "PowerShell installer must download the release signature");
+	check(source.includes("RSACryptoServiceProvider"), "PowerShell installer must verify the checksum manifest with its embedded RSA public key");
+	check(source.includes('$releaseSigningKeyId = "piloom-release-2026-08"'), "PowerShell installer is missing the expected release signing key ID");
+	check(
+		source.includes("Verify-ReleaseSignature $checksumPath $signaturePath"),
+		"PowerShell installer must authenticate the checksum manifest",
+	);
+	check(
+		source.indexOf("Verify-ReleaseSignature $checksumPath $signaturePath") < source.indexOf("Verify-Checksum $checksumPath $tarballPath"),
+		"PowerShell installer must authenticate the checksum manifest before trusting its archive hash",
+	);
 	check(source.includes('$downloadBaseUri.Scheme -ne "https"'), "PowerShell installer must require HTTPS downloads");
 	check(
 		source.includes("PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS"),
@@ -333,6 +347,71 @@ function checkPowerShellInstaller(source) {
 	check(source.includes("[guid]::NewGuid"), "PowerShell installer must use a unique temporary directory");
 	check(source.includes("Remove-Item -LiteralPath $temporaryDirectory"), "PowerShell installer must clean up its temporary directory");
 	check(!source.includes("curl -LsSf") && !source.includes("install.sh"), "PowerShell installer must not depend on the POSIX installer");
+}
+
+function checkPowerShellSignatureFixture(source) {
+	const mainStart = source.indexOf("if ($baseUrl -eq $unconfiguredBaseUrl)");
+	if (mainStart === -1) {
+		failures.push("PowerShell installer check could not isolate its function definitions");
+		return;
+	}
+
+	const temporaryDirectory = mkdtempSync(join(tmpdir(), "piloom-installer-signature-"));
+	const harnessPath = join(temporaryDirectory, "verify-signature.ps1");
+	const fixtureDirectory = join(process.cwd(), "scripts", "fixtures", "release-signing");
+	const quotePowerShell = (value) => value.replaceAll("'", "''");
+	const harness = `${source.slice(0, mainStart)}
+$fixtureDirectory = '${quotePowerShell(fixtureDirectory)}'
+$checksumPath = Join-Path $fixtureDirectory 'SHA256SUMS'
+$signaturePath = Join-Path $fixtureDirectory 'SHA256SUMS.sig'
+Verify-ReleaseSignature $checksumPath $signaturePath '0.0.0' 'stable'
+function Assert-SignatureRejected([scriptblock]$Action, [string]$Label) {
+	try {
+		& $Action
+	} catch {
+		return
+	}
+	throw "Release signature check accepted $Label."
+}
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $signaturePath '0.0.0' 'beta' } 'a substituted channel'
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $signaturePath '0.0.1' 'stable' } 'a substituted version'
+$tamperedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.tampered'
+Copy-Item -LiteralPath $checksumPath -Destination $tamperedPath
+[System.IO.File]::AppendAllText($tamperedPath, 'tampered')
+Assert-SignatureRejected { Verify-ReleaseSignature $tamperedPath $signaturePath '0.0.0' 'stable' } 'a tampered manifest'
+foreach ($variant in @('keyId', 'algorithm', 'signature', 'version', 'extra')) {
+	$variantEnvelope = Get-Content -LiteralPath $signaturePath -Raw | ConvertFrom-Json
+	switch ($variant) {
+		'keyId' { $variantEnvelope.keyId = 'wrong-key' }
+		'algorithm' { $variantEnvelope.algorithm = 'wrong-algorithm' }
+		'signature' { $variantEnvelope.signature = 'not-base64!' }
+		'version' { $variantEnvelope.version = 2 }
+		'extra' { $variantEnvelope | Add-Member -NotePropertyName extra -NotePropertyValue true }
+	}
+	$variantPath = Join-Path '${quotePowerShell(temporaryDirectory)}' "SHA256SUMS.$variant.sig"
+	$variantEnvelope | ConvertTo-Json -Compress | Set-Content -LiteralPath $variantPath -Encoding UTF8
+	Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $variantPath '0.0.0' 'stable' } "$variant variant"
+}
+$malformedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.malformed.sig'
+Set-Content -LiteralPath $malformedPath -Value '{' -Encoding ASCII
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $malformedPath '0.0.0' 'stable' } 'malformed JSON'
+$oversizedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.oversized.sig'
+[System.IO.File]::WriteAllText($oversizedPath, ('x' * 16385))
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $oversizedPath '0.0.0' 'stable' } 'an oversized envelope'
+`;
+	writeFileSync(harnessPath, harness);
+	try {
+		const result = spawnSync(
+			"powershell.exe",
+			["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harnessPath],
+			{ encoding: "utf8" },
+		);
+		if (result.status !== 0) {
+			failures.push(`PowerShell release signature fixture failed: ${(result.stderr || result.stdout).trim()}`);
+		}
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
 }
 
 function emptyParsedCase() {

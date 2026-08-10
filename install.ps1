@@ -14,6 +14,11 @@ if ($defaultChannel -eq $unconfiguredDefaultChannel) {
 $releaseChannel = if ($env:PRIME_AGENT_RELEASE_CHANNEL) { $env:PRIME_AGENT_RELEASE_CHANNEL } else { $defaultChannel }
 $packageName = if ($env:PRIME_AGENT_PACKAGE) { $env:PRIME_AGENT_PACKAGE } else { "prime-agent" }
 $commandName = if ($env:PRIME_AGENT_CMD) { $env:PRIME_AGENT_CMD } else { "piloom" }
+$releaseSigningKeyId = "piloom-release-2026-08"
+$releaseSigningAlgorithm = "RSA-SHA256"
+# SHA-256 fingerprint of the DER-encoded public key: 8HCpYV2gRRgDYCmdPqQGEG4G257XghPRpzMmbQG3DU4=
+$releaseSigningModulus = "xVa8+RGteyJqLVxbCg6Grp3awVN1ROmGWLpnQr2FUuAnq6WO+vY5jHABxpFhBZZDdzLmfJuy9LYikL8hLpHvuL8ip9LWHHhE6+AkDjdVYW0x5AWezdKHhf+1qxtwMeGxBJFwhbrMlwZL6qM140c/aH+RRivHWmRhUTignNhvn/AJiuZmm23yDK3FqqEC7QEnXabyreg4cPMfxHHMyklkowTHOz3gcSnxSj2cYgC9EFNtWqJZHk0deT77ZmaZ5De7pAEkQnqrn7zmQCc2k9+Rgg1jiAd7re6iH1RFNwmNysgaVGQz9lIKzAw3AslJKyunmrlvAXI8UMJBdDoU2YGtZ6HiLWyKrapw++ozFHGuJvgQWDQxfKQrTu9+Nc7cvkPblEu1jNV/dYPHINAoVkJboChkEA16Mz05yYL2alrEZ9SHBrY8nbqR8Tnw7Go8kY5dV/3QsdfxT/Ny89aI9whaTWsHWwCfREWoCkirgRdV0WGXMTRJ28ap9qdJcMa5Regb"
+$releaseSigningExponent = "AQAB"
 
 function Fail([string]$Message) {
 	Write-Error $Message
@@ -42,6 +47,74 @@ function Invoke-SecureWebRequest([string]$Uri, [string]$OutFile = "") {
 		$request.OutFile = $OutFile
 	}
 	return Invoke-WebRequest @request
+}
+
+function Verify-ReleaseSignature([string]$ChecksumPath, [string]$SignaturePath, [string]$ExpectedVersion, [string]$ExpectedChannel) {
+	$signatureFile = Get-Item -LiteralPath $SignaturePath
+	if ($signatureFile.Length -gt 16384) {
+		throw "Release signature envelope is too large."
+	}
+
+	try {
+		$envelope = Get-Content -LiteralPath $SignaturePath -Raw | ConvertFrom-Json
+	} catch {
+		throw "Release signature envelope is not valid JSON."
+	}
+	if ($envelope -isnot [PSCustomObject]) {
+		throw "Release signature envelope must be an object."
+	}
+	$fields = @($envelope.PSObject.Properties.Name | Sort-Object)
+	$expectedFields = @("algorithm", "channel", "keyId", "releaseVersion", "signature", "version")
+	if ($fields.Count -ne $expectedFields.Count -or (Compare-Object $fields $expectedFields)) {
+		throw "Release signature envelope has unexpected fields."
+	}
+	if ($envelope.version -ne 1) {
+		throw "Unsupported release signature version: $($envelope.version)"
+	}
+	if ($envelope.keyId -ne $releaseSigningKeyId) {
+		throw "Unexpected release signing key: $($envelope.keyId)"
+	}
+	if ($envelope.algorithm -ne $releaseSigningAlgorithm) {
+		throw "Unsupported release signature algorithm: $($envelope.algorithm)"
+	}
+	if ($envelope.channel -ne $ExpectedChannel) {
+		throw "Unexpected release channel: $($envelope.channel)"
+	}
+	if ($envelope.releaseVersion -ne $ExpectedVersion) {
+		throw "Unexpected signed release version: $($envelope.releaseVersion)"
+	}
+	if ($envelope.signature -isnot [string] -or $envelope.signature.Length -eq 0 -or $envelope.signature.Length -gt 16384) {
+		throw "Release signature is invalid."
+	}
+
+	try {
+		$signatureBytes = [Convert]::FromBase64String($envelope.signature)
+	} catch {
+		throw "Release signature is not valid base64."
+	}
+	if ([Convert]::ToBase64String($signatureBytes) -ne $envelope.signature) {
+		throw "Release signature is not canonical base64."
+	}
+
+	$parameters = New-Object System.Security.Cryptography.RSAParameters
+	$parameters.Modulus = [Convert]::FromBase64String($releaseSigningModulus)
+	$parameters.Exponent = [Convert]::FromBase64String($releaseSigningExponent)
+	$rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+	try {
+		$rsa.PersistKeyInCsp = $false
+		$rsa.ImportParameters($parameters)
+		$checksumBytes = [System.IO.File]::ReadAllBytes($ChecksumPath)
+		$contextBytes = [System.Text.Encoding]::UTF8.GetBytes("piloom-release-signature-v1`0$ExpectedChannel`0$ExpectedVersion`0")
+		$signedBytes = New-Object byte[] ($contextBytes.Length + $checksumBytes.Length)
+		[System.Buffer]::BlockCopy($contextBytes, 0, $signedBytes, 0, $contextBytes.Length)
+		[System.Buffer]::BlockCopy($checksumBytes, 0, $signedBytes, $contextBytes.Length, $checksumBytes.Length)
+		$sha256Oid = [System.Security.Cryptography.CryptoConfig]::MapNameToOID("SHA256")
+		if (-not $rsa.VerifyData($signedBytes, $sha256Oid, $signatureBytes)) {
+			throw "Release signature verification failed for $ChecksumPath."
+		}
+	} finally {
+		$rsa.Dispose()
+	}
 }
 
 function Normalize-Version([string]$Value) {
@@ -198,10 +271,13 @@ try {
 	New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
 	try {
 		$checksumPath = Join-Path $temporaryDirectory "SHA256SUMS"
+		$signaturePath = Join-Path $temporaryDirectory "SHA256SUMS.sig"
 		$tarballPath = Join-Path $temporaryDirectory $tarballName
 
 		Write-Step "Downloading and verifying PiLoom v$version"
 		Invoke-SecureWebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS" -OutFile $checksumPath | Out-Null
+		Invoke-SecureWebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS.sig" -OutFile $signaturePath | Out-Null
+		Verify-ReleaseSignature $checksumPath $signaturePath $version $releaseChannel
 		Invoke-SecureWebRequest -Uri $tarballUrl -OutFile $tarballPath | Out-Null
 		Verify-Checksum $checksumPath $tarballPath
 
