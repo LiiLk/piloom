@@ -45,6 +45,7 @@ import { readSessionInfo, type SessionInfo } from "../../core/session-manager.js
 import { SettingsManager } from "../../core/settings-manager.js";
 import { signalProcessGroupOrProcess } from "../../utils/child-process.js";
 import { killProcessTree } from "../../utils/shell.js";
+import { protectWindowsData, unprotectWindowsData } from "../../utils/windows-process-security.js";
 import type { AgentConnectionHeartbeat } from "../agent-connection/types.js";
 import { attachJsonlLineReader, serializeJsonLine } from "../rpc/jsonl.js";
 import type { PrivateFrame } from "../session-worker/private-framing.js";
@@ -153,6 +154,7 @@ const IDLE_EVICTION_DRAIN_TIMEOUT_MS = 5_000;
 const CHILD_PASSIVATION_PER_WORKER_CAP = 2;
 const SUPERVISOR_CONFIG_FILE_NAME = "supervisor-config";
 const WORKER_STARTUP_GATE_FD = 3;
+const WINDOWS_PROTECTED_WORKER_TOKEN_PREFIX = "dpapi:";
 
 const DAEMON_COMMAND_TYPES: ReadonlySet<string> = new Set([
 	"ack_result",
@@ -439,6 +441,42 @@ function isDaemonWorkerDescriptor(value: unknown, socketPath: string): value is 
 	);
 }
 
+function workerAuthenticationEntropy(socketPath: string, workerId: string): Buffer {
+	return createHash("sha256")
+		.update("piloom-daemon-worker-token\0")
+		.update(socketPath)
+		.update("\0")
+		.update(workerId)
+		.digest();
+}
+
+export function protectWorkerDescriptorForStorage(descriptor: DaemonWorkerDescriptor): DaemonWorkerDescriptor {
+	if (process.platform !== "win32") return descriptor;
+	return {
+		...descriptor,
+		authenticationToken: `${WINDOWS_PROTECTED_WORKER_TOKEN_PREFIX}${protectWindowsData(
+			Buffer.from(descriptor.authenticationToken, "utf8"),
+			workerAuthenticationEntropy(descriptor.supervisorSocketPath, descriptor.workerId),
+		)}`,
+	};
+}
+
+export function unprotectWorkerDescriptorFromStorage(descriptor: DaemonWorkerDescriptor): DaemonWorkerDescriptor {
+	if (process.platform !== "win32") return descriptor;
+	if (!descriptor.authenticationToken.startsWith(WINDOWS_PROTECTED_WORKER_TOKEN_PREFIX)) {
+		throw new Error("Refusing an unprotected Windows worker authentication token");
+	}
+	const protectedToken = descriptor.authenticationToken.slice(WINDOWS_PROTECTED_WORKER_TOKEN_PREFIX.length);
+	const authenticationToken = unprotectWindowsData(
+		protectedToken,
+		workerAuthenticationEntropy(descriptor.supervisorSocketPath, descriptor.workerId),
+	).toString("utf8");
+	if (!/^[A-Za-z0-9_-]{40,128}$/.test(authenticationToken)) {
+		throw new Error("Invalid protected Windows worker authentication token");
+	}
+	return { ...descriptor, authenticationToken };
+}
+
 function sessionSummariesFromResponse(response: DaemonResponse): SessionSummary[] {
 	if (!response.success || !response.data || typeof response.data !== "object" || !("sessions" in response.data)) {
 		throw new Error("Session worker returned an invalid list response");
@@ -618,6 +656,7 @@ export class DaemonSupervisor {
 	private agentPeerSyncQueue: Promise<void> = Promise.resolve();
 	private readonly pendingSessionNames = new Set<string>();
 	private readonly windowsAuthenticationTimeouts = new Map<DaemonSocketClient, ReturnType<typeof setTimeout>>();
+	private readonly windowsAuthenticationChallenges = new WeakMap<DaemonSocketClient, string>();
 	private readonly catalog: DaemonCatalogClient;
 	private readonly settingsManager: SettingsManager;
 	private idleEvictionTimer?: ReturnType<typeof setTimeout>;
@@ -740,7 +779,11 @@ export class DaemonSupervisor {
 			};
 			this.server?.once("error", onError);
 			this.server?.once("listening", onListening);
-			this.server?.listen(this.socketPath);
+			this.server?.listen(
+				process.platform === "win32"
+					? { path: this.socketPath, exclusive: true, readableAll: false, writableAll: false }
+					: this.socketPath,
+			);
 		});
 	}
 
@@ -931,10 +974,11 @@ export class DaemonSupervisor {
 			}
 			const path = join(this.descriptorDir, name);
 			try {
-				const descriptor: unknown = JSON.parse(readFileSync(path, "utf8"));
-				if (!isDaemonWorkerDescriptor(descriptor, this.socketPath)) {
+				const storedDescriptor: unknown = JSON.parse(readFileSync(path, "utf8"));
+				if (!isDaemonWorkerDescriptor(storedDescriptor, this.socketPath)) {
 					continue;
 				}
+				const descriptor = unprotectWorkerDescriptorFromStorage(storedDescriptor);
 				descriptor.lifecycle = "recovering";
 				descriptor.recoveryJournalPath ??= join(this.descriptorDir, `${descriptor.workerId}.recovery.jsonl`);
 				descriptor.orphanProcessJournalPath ??= join(this.descriptorDir, `${descriptor.workerId}.orphans.jsonl`);
@@ -996,7 +1040,8 @@ export class DaemonSupervisor {
 	private persistWorker(worker: ResidentWorker): void {
 		worker.descriptor.updatedAt = new Date().toISOString();
 		const tempPath = `${worker.descriptorPath}.${process.pid}.tmp`;
-		writeFileSync(tempPath, `${JSON.stringify(worker.descriptor, null, 2)}\n`, { mode: 0o600 });
+		const storedDescriptor = protectWorkerDescriptorForStorage(worker.descriptor);
+		writeFileSync(tempPath, `${JSON.stringify(storedDescriptor, null, 2)}\n`, { mode: 0o600 });
 		chmodSync(tempPath, 0o600);
 		renameSync(tempPath, worker.descriptorPath);
 	}
@@ -1026,6 +1071,8 @@ export class DaemonSupervisor {
 			supportsExtensionUi: false,
 			capabilities: new Set(DAEMON_DEFAULT_CLIENT_CAPABILITIES),
 		};
+		const authenticationChallenge = process.platform === "win32" ? randomUUID() : undefined;
+		if (authenticationChallenge) this.windowsAuthenticationChallenges.set(client, authenticationChallenge);
 		this.clients.add(client);
 		void this.ready.then(
 			() => {
@@ -1050,6 +1097,7 @@ export class DaemonSupervisor {
 						supervisorSocketPath: this.ownership?.record.socketPath,
 						clientId: client.id,
 						serverCapabilities: getDaemonSupervisorServerCapabilities(),
+						...(authenticationChallenge ? { authenticationChallenge } : {}),
 					});
 				}
 			},
@@ -1065,6 +1113,7 @@ export class DaemonSupervisor {
 			cleaned = true;
 			client.detachInput();
 			this.clearWindowsAuthenticationTimeout(client);
+			this.windowsAuthenticationChallenges.delete(client);
 			this.clients.delete(client);
 			this.cancelWaitingPromptAdmissionsForClient(client);
 			for (const activeSessionId of [...client.attachedActiveSessionIds]) {
@@ -1275,11 +1324,20 @@ export class DaemonSupervisor {
 			return;
 		}
 		const envelopeClientId = preParsed.envelopeClientId;
-		if (envelopeClientId) {
-			this.protocolClientIds.set(client, envelopeClientId);
-			client.id = envelopeClientId;
+		const boundClientId = this.protocolClientIds.get(client);
+		if (boundClientId && envelopeClientId !== boundClientId) {
+			if (parsedAdmission) this.deletePromptAdmission(parsedAdmission);
+			this.write(
+				client,
+				failure(command.id, command.type, "Daemon client identity changed on an authenticated socket"),
+			);
+			client.socket.end();
+			return;
 		}
-		this.cancelOwnedWorkerCleanup(client.id);
+		if (!boundClientId && envelopeClientId) {
+			this.protocolClientIds.set(client, envelopeClientId);
+		}
+		this.cancelOwnedWorkerCleanup(this.protocolClientId(client));
 		if (!DAEMON_COMMAND_TYPES.has(command.type)) {
 			this.write(client, failure(command.id, command.type, `Unknown daemon command: ${command.type}`));
 			return;
@@ -1395,14 +1453,17 @@ export class DaemonSupervisor {
 	}
 
 	private handleWindowsClientAuthentication(client: DaemonSocketClient, line: string): void {
-		const result = verifyDaemonPublicAuthentication(line, this.ownership?.authenticationToken);
-		if (!result.authenticated || !result.serverProof) {
+		const challenge = this.windowsAuthenticationChallenges.get(client);
+		this.windowsAuthenticationChallenges.delete(client);
+		const result = verifyDaemonPublicAuthentication(line, this.ownership?.authenticationToken, challenge);
+		if (!result.authenticated || !result.serverProof || !result.clientId) {
 			this.write(client, failure(result.id, "daemon_auth", "Daemon authentication failed"));
 			client.socket.end();
 			return;
 		}
 
 		client.authenticated = true;
+		this.protocolClientIds.set(client, result.clientId);
 		this.clearWindowsAuthenticationTimeout(client);
 		this.write(client, success(result.id, "daemon_auth", { proof: result.serverProof }));
 	}
@@ -3331,9 +3392,6 @@ export class DaemonSupervisor {
 		const duplicateValidation = this.currentSnapshotGeneration(match.worker, activeSessionId)?.validation;
 		if (duplicateValidation) {
 			await duplicateValidation.promise;
-		}
-		if (command.clientId) {
-			client.id = command.clientId;
 		}
 		client.capabilities = normalizeCapabilities(command.capabilities, command.supportsExtensionUi);
 		client.supportsExtensionUi = client.capabilities.has("extension_ui");

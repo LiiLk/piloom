@@ -71,6 +71,7 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 		process.env[REGISTRY_ENV] = registryDir;
 	}
 	const server: Server = createServer((socket) => {
+		const authenticationChallenge = randomUUID();
 		socket.on("error", () => undefined);
 		send(socket, {
 			type: "daemon_hello",
@@ -81,8 +82,9 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 			supervisorGeneration: generation,
 			clientId: "fake-client",
 			serverCapabilities: ownership
-				? [...(options.serverCapabilities ?? []), "windows_pipe_auth"]
+				? [...(options.serverCapabilities ?? []), "windows_transport_auth"]
 				: (options.serverCapabilities ?? []),
+			...(ownership ? { authenticationChallenge } : {}),
 		});
 		let buffer = "";
 		socket.on("data", (chunk) => {
@@ -102,7 +104,11 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 				};
 				const command = wire.type === "command" && wire.command ? wire.command : wire;
 				if (command.type === "daemon_auth" && ownership) {
-					const result = verifyDaemonPublicAuthentication(line, ownership.authenticationToken);
+					const result = verifyDaemonPublicAuthentication(
+						line,
+						ownership.authenticationToken,
+						authenticationChallenge,
+					);
 					send(socket, {
 						type: "response",
 						command: "daemon_auth",

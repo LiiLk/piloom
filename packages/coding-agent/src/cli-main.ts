@@ -7,6 +7,7 @@ import {
 	maybeRunOwnedSessionWorkerFrontend,
 } from "./cli/owned-session-worker.js";
 import { APP_NAME } from "./config.js";
+import { isDaemonWorkerProcess } from "./modes/daemon/daemon-worker-protocol.js";
 import { installWindowsKillOnCloseJob } from "./utils/windows-process-security.js";
 
 export async function runCli(): Promise<void> {
@@ -21,7 +22,12 @@ export async function runCli(): Promise<void> {
 	process.emitWarning = (() => {}) as typeof process.emitWarning;
 
 	installOwnedSessionWorkerOwnerWatch();
-	if (process.platform === "win32" && isOwnedSessionWorkerProcess() && !installWindowsKillOnCloseJob()) {
+	const daemonWorker = isDaemonWorkerProcess();
+	if (
+		process.platform === "win32" &&
+		(isOwnedSessionWorkerProcess() || daemonWorker) &&
+		!installWindowsKillOnCloseJob({ allowExplicitBreakaway: daemonWorker })
+	) {
 		throw new Error("Unable to install the Windows worker Job Object");
 	}
 

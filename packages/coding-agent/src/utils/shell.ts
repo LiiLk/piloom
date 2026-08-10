@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
 import { recordOrphanProcessState } from "../core/orphan-process-journal.js";
@@ -14,34 +14,28 @@ export interface ShellConfig {
  */
 function findBashOnPath(): string | null {
 	if (process.platform === "win32") {
-		// Windows: Use 'where', verify file existence, and probe the shell. The
-		// system WSL shim can exist on PATH without a usable distribution.
-		try {
-			const result = spawnSync("where", ["bash.exe"], {
-				encoding: "utf-8",
-				timeout: 5000,
-				windowsHide: true,
-			});
-			if (result.status === 0 && result.stdout) {
-				for (const match of result.stdout
-					.split(/\r?\n/)
-					.map((line) => line.trim())
-					.filter(Boolean)) {
-					if (!existsSync(match)) continue;
-					try {
-						const probe = spawnSync(match, ["-c", "exit 0"], {
-							stdio: "ignore",
-							timeout: 5000,
-							windowsHide: true,
-						});
-						if (probe.status === 0) return match;
-					} catch {
-						// Continue to the next PATH candidate.
-					}
-				}
+		// Do not spawn `where.exe`: Win32 executable lookup checks the current
+		// directory before PATH, so a repository-controlled binary could run.
+		const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+		const seen = new Set<string>();
+		for (const rawEntry of (process.env[pathKey] ?? "").split(delimiter)) {
+			const entry = rawEntry.trim().replace(/^"(.*)"$/, "$1");
+			if (!entry || !isAbsolute(entry)) continue;
+			const normalized = entry.toLowerCase();
+			if (seen.has(normalized)) continue;
+			seen.add(normalized);
+			const candidate = join(entry, "bash.exe");
+			if (!existsSync(candidate)) continue;
+			try {
+				const probe = spawnSync(candidate, ["-c", "exit 0"], {
+					stdio: "ignore",
+					timeout: 5000,
+					windowsHide: true,
+				});
+				if (probe.status === 0) return candidate;
+			} catch {
+				// Continue to the next absolute PATH candidate.
 			}
-		} catch {
-			// Ignore errors
 		}
 		return null;
 	}
@@ -246,18 +240,28 @@ export function killTrackedDetachedChildren(): void {
 	trackedDetachedChildPids.clear();
 }
 
+export function resolveWindowsSystem32Executable(name: "taskkill.exe"): string | undefined {
+	const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+	if (!windowsRoot || !isAbsolute(windowsRoot)) return undefined;
+	const executable = join(windowsRoot, "System32", name);
+	return existsSync(executable) ? executable : undefined;
+}
+
 /**
  * Kill a process and all its children (cross-platform)
  */
 export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
-		// Use taskkill on Windows to kill process tree
+		const taskkill = resolveWindowsSystem32Executable("taskkill.exe");
 		try {
-			const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
-				stdio: "ignore",
-				windowsHide: true,
-			});
-			if (result.status === 0) {
+			const result =
+				taskkill &&
+				spawnSync(taskkill, ["/F", "/T", "/PID", String(pid)], {
+					stdio: "ignore",
+					timeout: 10_000,
+					windowsHide: true,
+				});
+			if (result && result.status === 0) {
 				return;
 			}
 		} catch {

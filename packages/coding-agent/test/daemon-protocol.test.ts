@@ -72,14 +72,15 @@ describe("daemon protocol helpers", () => {
 	it("requires capability-gated authentication only for the public Windows supervisor", () => {
 		expect(DAEMON_COMMAND_COMPATIBILITY.daemon_auth).toEqual({
 			minProtocol: 9,
-			capability: "windows_pipe_auth",
+			minSchemaRevision: 17,
+			capability: "windows_transport_auth",
 		});
 		expect(getDaemonSupervisorServerCapabilities("win32")).toEqual([
 			...DAEMON_DEFAULT_SERVER_CAPABILITIES,
-			"windows_pipe_auth",
+			"windows_transport_auth",
 		]);
 		expect(getDaemonSupervisorServerCapabilities("linux")).toBe(DAEMON_DEFAULT_SERVER_CAPABILITIES);
-		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).not.toContain("windows_pipe_auth");
+		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).not.toContain("windows_transport_auth");
 	});
 
 	it("capability-gates explicit subagent deletion instead of schema-gating it", () => {

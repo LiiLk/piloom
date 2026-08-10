@@ -118,6 +118,7 @@ import { resolveSessionPath } from "../../core/session-resolver.js";
 import type { SessionStats } from "../../core/session-stats.js";
 import { type SideQuestionRun, startSideQuestion } from "../../core/side-question.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
+import { spawnDetachedWindowsProcess } from "../../utils/windows-process-security.js";
 import {
 	createAgentConnectionCommands,
 	createAgentConnectionResourceSnapshot,
@@ -609,7 +610,11 @@ export class AgentDaemon {
 				};
 				this.server?.once("error", onError);
 				this.server?.once("listening", onListening);
-				this.server?.listen(this.socketPath);
+				this.server?.listen(
+					process.platform === "win32"
+						? { path: this.socketPath, exclusive: true, readableAll: false, writableAll: false }
+						: this.socketPath,
+				);
 			});
 		} catch (error) {
 			this.cleanupSocketPath();
@@ -818,14 +823,23 @@ export class AgentDaemon {
 			delete environment[ORPHAN_PROCESS_JOURNAL_ENV];
 			delete environment[SESSION_LEASES_ENABLED_ENV];
 			delete environment[SESSION_LEASE_OWNER_ID_ENV];
-			const child = spawn(launch.command, launch.args, {
-				cwd: this.options.defaultSessionConfig.cwd ?? process.cwd(),
-				detached: true,
-				windowsHide: process.platform === "win32",
-				env: environment,
-				stdio: "ignore",
-			});
-			child.unref();
+			const launchCwd = this.options.defaultSessionConfig.cwd ?? process.cwd();
+			if (process.platform === "win32") {
+				spawnDetachedWindowsProcess({
+					command: launch.command,
+					args: launch.args,
+					cwd: launchCwd,
+					env: environment,
+				});
+			} else {
+				const child = spawn(launch.command, launch.args, {
+					cwd: launchCwd,
+					detached: true,
+					env: environment,
+					stdio: "ignore",
+				});
+				child.unref();
+			}
 			const deadline = Date.now() + 10_000;
 			while (!this.shuttingDown && Date.now() < deadline) {
 				if (await this.canConnectToSupervisor(supervisorSocketPath)) {

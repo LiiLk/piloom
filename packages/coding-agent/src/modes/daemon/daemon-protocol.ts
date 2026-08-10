@@ -59,8 +59,9 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
 // Revision 15 adds authenticated public Windows named-pipe startup.
 // Revision 16 replaces bearer-token authentication with mutual HMAC proof.
-export const DAEMON_SCHEMA_REVISION = 16;
-export const DAEMON_SCHEMA_ID = "protocol-9-schema-16-aaedd7da7a08";
+// Revision 17 binds a server challenge and immutable client identity to Windows transport authentication.
+export const DAEMON_SCHEMA_REVISION = 17;
+export const DAEMON_SCHEMA_ID = "protocol-9-schema-17-54e2022f6f21";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -99,7 +100,7 @@ export type DaemonServerCapability =
 	| "transient_bash"
 	| "session_input_admission"
 	| "prompt_admission_cancellation"
-	| "windows_pipe_auth";
+	| "windows_transport_auth";
 
 export type DaemonReplayStatus = "complete" | "partial" | "unavailable";
 
@@ -143,7 +144,7 @@ export function getDaemonSupervisorServerCapabilities(
 	platform: NodeJS.Platform = process.platform,
 ): readonly DaemonServerCapability[] {
 	return platform === "win32"
-		? [...DAEMON_DEFAULT_SERVER_CAPABILITIES, "windows_pipe_auth"]
+		? [...DAEMON_DEFAULT_SERVER_CAPABILITIES, "windows_transport_auth"]
 		: DAEMON_DEFAULT_SERVER_CAPABILITIES;
 }
 
@@ -353,7 +354,7 @@ export type DaemonSavedSessionListCommand =
 	  };
 
 export type DaemonCommand =
-	| { id?: string; type: "daemon_auth"; nonce: string; proof: string }
+	| { id?: string; type: "daemon_auth"; challenge: string; clientId: DaemonClientId; proof: string }
 	| {
 			id?: string;
 			type: "list";
@@ -647,10 +648,14 @@ const DELETE_RLM_SUBAGENT_COMMAND = {
 } as const;
 const FLAT_SESSION_TREE_COMMAND = { minProtocol: 7 } as const;
 const TELEMETRY_POLICY_COMMAND = { minProtocol: 7, minSchemaRevision: 14 } as const;
-const WINDOWS_PIPE_AUTH_COMMAND = { minProtocol: 9, capability: "windows_pipe_auth" } as const;
+const WINDOWS_TRANSPORT_AUTH_COMMAND = {
+	minProtocol: 9,
+	minSchemaRevision: 17,
+	capability: "windows_transport_auth",
+} as const;
 
 export const DAEMON_COMMAND_COMPATIBILITY = {
-	daemon_auth: WINDOWS_PIPE_AUTH_COMMAND,
+	daemon_auth: WINDOWS_TRANSPORT_AUTH_COMMAND,
 	ack_result: LEGACY_DAEMON_COMMAND,
 	list: LEGACY_DAEMON_COMMAND,
 	list_saved_sessions: LEGACY_DAEMON_COMMAND,
@@ -868,6 +873,8 @@ export type DaemonOutbound =
 			supervisorSocketPath?: string;
 			clientId: DaemonClientId;
 			serverCapabilities: readonly DaemonServerCapability[];
+			/** Single-use server nonce required by Windows transport authentication. */
+			authenticationChallenge?: string;
 	  }
 	| { type: "daemon_closing"; reason: DaemonClosingReason }
 	| { type: "heartbeats_changed" }

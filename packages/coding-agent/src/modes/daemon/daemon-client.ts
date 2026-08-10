@@ -475,17 +475,26 @@ export class DaemonClient {
 			return;
 		}
 		try {
-			if (process.platform === "win32" && this.socketPath.startsWith("\\\\.\\pipe\\")) {
-				if (!message.serverCapabilities?.includes("windows_pipe_auth") || !message.supervisorGeneration) {
+			if (process.platform === "win32") {
+				if (
+					!message.serverCapabilities?.includes("windows_transport_auth") ||
+					!message.supervisorGeneration ||
+					!message.authenticationChallenge
+				) {
 					throw new Error("Windows daemon authentication is required but was not advertised");
 				}
 				const token = readDaemonSupervisorAuthenticationToken(this.socketPath, message.supervisorGeneration);
 				if (!token) {
 					throw new Error("Unable to load the current Windows daemon authentication token");
 				}
-				const nonce = randomUUID();
+				const challenge = message.authenticationChallenge;
 				const response = await this.requestWire(
-					{ type: "daemon_auth", nonce, proof: createDaemonClientAuthenticationProof(token, nonce) },
+					{
+						type: "daemon_auth",
+						challenge,
+						clientId: this.protocolClientId,
+						proof: createDaemonClientAuthenticationProof(token, challenge, this.protocolClientId),
+					},
 					RECONNECT_HELLO_TIMEOUT_MS,
 				);
 				if (!response.success) {
@@ -495,7 +504,10 @@ export class DaemonClient {
 					response.data && typeof response.data === "object" && "proof" in response.data
 						? (response.data as { proof?: unknown }).proof
 						: undefined;
-				if (typeof serverProof !== "string" || !verifyDaemonServerAuthenticationProof(token, nonce, serverProof)) {
+				if (
+					typeof serverProof !== "string" ||
+					!verifyDaemonServerAuthenticationProof(token, challenge, this.protocolClientId, serverProof)
+				) {
 					throw new Error("Windows daemon server authentication failed");
 				}
 			}

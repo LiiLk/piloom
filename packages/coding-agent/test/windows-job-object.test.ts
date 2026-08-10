@@ -22,14 +22,45 @@ describe.skipIf(process.platform !== "win32")("Windows Job Object cleanup", () =
 			expect(isProcessAlive(childPid)).toBe(false);
 		} finally {
 			if (worker.pid && isProcessAlive(worker.pid)) {
-				spawnSync("taskkill.exe", ["/pid", String(worker.pid), "/t", "/f"], { windowsHide: true });
+				killWindowsProcessTree(worker.pid);
 			}
 			if (childPid && isProcessAlive(childPid)) {
-				spawnSync("taskkill.exe", ["/pid", String(childPid), "/t", "/f"], { windowsHide: true });
+				killWindowsProcessTree(childPid);
 			}
 		}
 	}, 15_000);
+
+	it("lets a replacement supervisor explicitly break away while keeping ordinary children confined", async () => {
+		const fixture = resolve(__dirname, "fixtures/windows-job-worker.ts");
+		const tsxCli = resolve(__dirname, "../../../node_modules/tsx/dist/cli.mjs");
+		const worker = spawn(process.execPath, [tsxCli, fixture], {
+			env: { ...process.env, PILOOM_TEST_BREAKAWAY: "1" },
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		let childPid: number | undefined;
+		try {
+			const line = await readFirstLine(worker.stdout);
+			childPid = (JSON.parse(line) as { childPid: number }).childPid;
+			expect(isProcessAlive(childPid)).toBe(true);
+
+			process.kill(worker.pid!);
+			await waitForExit(worker);
+			expect(isProcessAlive(childPid)).toBe(true);
+		} finally {
+			if (worker.pid && isProcessAlive(worker.pid)) killWindowsProcessTree(worker.pid);
+			if (childPid && isProcessAlive(childPid)) killWindowsProcessTree(childPid);
+		}
+	}, 15_000);
 });
+
+function killWindowsProcessTree(pid: number): void {
+	const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+	if (!windowsRoot) throw new Error("SystemRoot is unavailable");
+	spawnSync(resolve(windowsRoot, "System32", "taskkill.exe"), ["/pid", String(pid), "/t", "/f"], {
+		windowsHide: true,
+	});
+}
 
 function readFirstLine(stream: NodeJS.ReadableStream): Promise<string> {
 	return new Promise((resolveLine, reject) => {

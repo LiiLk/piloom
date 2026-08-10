@@ -55,18 +55,21 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 		const recovered = readDaemonSupervisorAuthenticationToken(socketPath, generation, registryDir);
 		expect(recovered).toBe(ownership.authenticationToken);
 		expect(recovered).toBeTruthy();
-		const nonce = randomUUID();
+		const challenge = randomUUID();
+		const clientId = `client-${randomUUID()}`;
 		expect(
 			verifyDaemonPublicAuthentication(
 				JSON.stringify({
 					id: "auth",
 					type: "daemon_auth",
-					nonce,
-					proof: createDaemonClientAuthenticationProof(recovered!, nonce),
+					challenge,
+					clientId,
+					proof: createDaemonClientAuthenticationProof(recovered!, challenge, clientId),
 				}),
 				recovered,
+				challenge,
 			),
-		).toMatchObject({ authenticated: true, id: "auth", serverProof: expect.any(String) });
+		).toMatchObject({ authenticated: true, clientId, id: "auth", serverProof: expect.any(String) });
 		expect(
 			verifyDaemonPublicAuthentication(
 				JSON.stringify({
@@ -76,6 +79,7 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 					command: { type: "list" },
 				}),
 				recovered,
+				challenge,
 			),
 		).toEqual({ authenticated: false, id: "old-client" });
 	});
@@ -109,7 +113,8 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 		const hello = await lines.next();
 		expect(hello).toMatchObject({
 			type: "daemon_hello",
-			serverCapabilities: expect.arrayContaining(["windows_pipe_auth"]),
+			serverCapabilities: expect.arrayContaining(["windows_transport_auth"]),
+			authenticationChallenge: expect.any(String),
 		});
 		socket.write(serializeJsonLine(createDaemonCommandEnvelope({ type: "list" }, "old-list", "old-client", 7)));
 
@@ -117,6 +122,57 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 			id: "old-list",
 			command: "daemon_auth",
 			success: false,
+		});
+	});
+
+	it("binds the authenticated client identity to one socket", async () => {
+		const root = createTempDirectory();
+		cleanup.push(() => rmSync(root, { recursive: true, force: true }));
+		const registryDir = join(root, "registry");
+		process.env[REGISTRY_ENV] = registryDir;
+		const socketPath = createPipePath();
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as unknown as typeof process.exit);
+		cleanup.push(() => exit.mockRestore());
+		const supervisor = new DaemonSupervisor(socketPath, {
+			defaultSessionConfig: { cwd: root, agentDir: join(root, "agent"), noExtensions: true, noTools: true },
+		});
+		await supervisor.start();
+		cleanup.push(async () => {
+			await shutdownSupervisor(socketPath);
+			await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+		});
+
+		const socket = createConnection(socketPath);
+		cleanup.push(() => {
+			socket.destroy();
+		});
+		const lines = createLineQueue(socket);
+		const hello = await lines.next();
+		const generation = hello.supervisorGeneration;
+		const challenge = hello.authenticationChallenge;
+		expect(typeof generation).toBe("string");
+		expect(typeof challenge).toBe("string");
+		const token = readDaemonSupervisorAuthenticationToken(socketPath, generation as string, registryDir);
+		expect(token).toBeTruthy();
+		const clientId = `client-${randomUUID()}`;
+		socket.write(
+			serializeJsonLine({
+				id: "auth",
+				type: "daemon_auth",
+				challenge,
+				clientId,
+				proof: createDaemonClientAuthenticationProof(token!, challenge as string, clientId),
+			}),
+		);
+		await expect(lines.next()).resolves.toMatchObject({ id: "auth", success: true });
+
+		socket.write(
+			serializeJsonLine(createDaemonCommandEnvelope({ type: "list" }, "spoofed-list", `${clientId}-spoofed`)),
+		);
+		await expect(lines.next()).resolves.toMatchObject({
+			id: "spoofed-list",
+			success: false,
+			error: expect.stringContaining("identity changed"),
 		});
 	});
 
@@ -138,14 +194,18 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 
 		const receivedTypes: string[] = [];
 		const server = createServer((socket) => {
-			writeHello(socket, socketPath, generation, getDaemonSupervisorServerCapabilities("win32"), undefined);
+			const challenge = writeHello(socket, socketPath, generation, getDaemonSupervisorServerCapabilities("win32"));
 			readJsonLines(socket, (message) => {
 				const type = typeof message.type === "string" ? message.type : "unknown";
 				receivedTypes.push(type);
 				if (type === "daemon_auth") {
-					const request = message as { id: string; nonce: string; proof: string; token?: string };
+					const request = message as { clientId: string; id: string; proof: string; token?: string };
 					expect(request.token).toBeUndefined();
-					const result = verifyDaemonPublicAuthentication(JSON.stringify(message), ownership.authenticationToken);
+					const result = verifyDaemonPublicAuthentication(
+						JSON.stringify(message),
+						ownership.authenticationToken,
+						challenge,
+					);
 					expect(result.authenticated).toBe(true);
 					socket.write(serializeJsonLine(success(request.id, "daemon_auth", { proof: result.serverProof })));
 					return;
@@ -231,7 +291,8 @@ function writeHello(
 	generation: string,
 	serverCapabilities: readonly string[],
 	protocolVersion = DAEMON_PROTOCOL_INFO.version,
-): void {
+): string {
+	const authenticationChallenge = randomUUID();
 	socket.write(
 		serializeJsonLine({
 			type: "daemon_hello",
@@ -241,8 +302,10 @@ function writeHello(
 			schemaRevision: protocolVersion === DAEMON_PROTOCOL_INFO.version ? DAEMON_SCHEMA_REVISION : 14,
 			supervisorGeneration: generation,
 			serverCapabilities,
+			authenticationChallenge,
 		}),
 	);
+	return authenticationChallenge;
 }
 
 function readJsonLines(socket: Socket, listener: (message: Record<string, unknown>) => void): void {

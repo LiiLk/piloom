@@ -42,16 +42,11 @@ describe("Windows shell compatibility", () => {
 		}
 	});
 
-	it("uses the first existing bash path returned by where", () => {
+	it("probes bash only from absolute PATH entries", () => {
 		const root = join(tmpdir(), `coding-agent-shell-path-test-${Date.now()}`);
 		const bashPath = join(root, "bash.exe");
 		mkdirSync(root, { recursive: true });
 		writeFileSync(bashPath, "fake bash");
-		childProcessMocks.spawnSync.mockReturnValue({
-			status: 0,
-			stdout: `${join(root, "missing-bash.exe")}\r\n${bashPath}\r\n`,
-			stderr: "",
-		});
 
 		const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 		const originalEnvironment = process.env;
@@ -61,10 +56,17 @@ describe("Windows shell compatibility", () => {
 			ProgramW6432: "",
 			"ProgramFiles(x86)": "",
 			LOCALAPPDATA: "",
+			PATH: `${delimiter}.${delimiter}relative${delimiter}${root}`,
 		};
 
 		try {
 			expect(getShellConfig()).toEqual({ shell: bashPath, args: ["-c"] });
+			expect(childProcessMocks.spawnSync).toHaveBeenCalledTimes(1);
+			expect(childProcessMocks.spawnSync).toHaveBeenCalledWith(bashPath, ["-c", "exit 0"], {
+				stdio: "ignore",
+				timeout: 5000,
+				windowsHide: true,
+			});
 		} finally {
 			process.env = originalEnvironment;
 			platform.mockRestore();
@@ -97,12 +99,24 @@ describe("Windows shell compatibility", () => {
 
 	it("kills Windows process trees synchronously without detaching taskkill", () => {
 		vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+		const root = join(tmpdir(), `coding-agent-system32-test-${Date.now()}`);
+		const taskkillPath = join(root, "System32", "taskkill.exe");
+		mkdirSync(dirname(taskkillPath), { recursive: true });
+		writeFileSync(taskkillPath, "fake taskkill");
+		const originalEnvironment = process.env;
+		process.env = { ...originalEnvironment, SystemRoot: root };
 
-		killProcessTree(1234);
+		try {
+			killProcessTree(1234);
 
-		expect(childProcessMocks.spawnSync).toHaveBeenCalledWith("taskkill", ["/F", "/T", "/PID", "1234"], {
-			stdio: "ignore",
-			windowsHide: true,
-		});
+			expect(childProcessMocks.spawnSync).toHaveBeenCalledWith(taskkillPath, ["/F", "/T", "/PID", "1234"], {
+				stdio: "ignore",
+				timeout: 10_000,
+				windowsHide: true,
+			});
+		} finally {
+			process.env = originalEnvironment;
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

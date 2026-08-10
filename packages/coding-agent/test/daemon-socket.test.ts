@@ -11,14 +11,24 @@ import {
 	getDaemonSocketIdentity,
 	prepareDaemonSocketPath,
 } from "../src/modes/daemon/daemon-socket.js";
+import { getWindowsCurrentUserSid, windowsDaemonUserKey } from "../src/utils/windows-process-security.js";
 
 describe("defaultDaemonSocketPath", () => {
-	it("uses a fixed Windows named pipe path", () => {
+	it("uses an opaque per-user Windows named pipe path", () => {
 		if (process.platform !== "win32") {
 			return;
 		}
 
-		expect(defaultDaemonSocketPath()).toBe("\\\\.\\pipe\\prime-agent-daemon");
+		const sid = getWindowsCurrentUserSid();
+		const socketPath = defaultDaemonSocketPath();
+		expect(socketPath).toBe(`\\\\.\\pipe\\prime-agent-daemon-${windowsDaemonUserKey(sid)}`);
+		expect(socketPath).not.toContain(sid);
+	});
+
+	it("derives distinct opaque keys for distinct Windows identities", () => {
+		expect(windowsDaemonUserKey("S-1-5-21-100")).toBe(windowsDaemonUserKey("S-1-5-21-100"));
+		expect(windowsDaemonUserKey("S-1-5-21-100")).not.toBe(windowsDaemonUserKey("S-1-5-21-101"));
+		expect(windowsDaemonUserKey("S-1-5-21-100")).not.toContain("S-1-5-21-100");
 	});
 
 	it("uses a per-user Unix socket directory", () => {
