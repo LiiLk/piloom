@@ -4,11 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const installerSource = readFileSync("install.sh", "utf-8");
+const powershellInstallerSource = readFileSync("install.ps1", "utf-8");
+const isWindows = process.platform === "win32";
 const mainCall = '\nmain "$@"';
 const mainCallIndex = installerSource.lastIndexOf(mainCall);
 const ansiPattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const syncEnd = "\x1b[?2026l";
 const failures = [];
+
+check(installerSource.includes('prime_agent_cmd="${PRIME_AGENT_CMD:-piloom}"'), "POSIX installer must expose piloom as the default command");
+check(installerSource.includes("verify_prime_agent_release_signature"), "POSIX installer must verify signed release checksums");
+check(installerSource.includes('signature_url="$checksums_url.sig"'), "POSIX installer must download the release signature");
+checkPowerShellInstaller(powershellInstallerSource);
+
+if (isWindows) {
+	checkPowerShellSignatureFixture(powershellInstallerSource);
+	if (failures.length > 0) {
+		console.error(["Installer check failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"));
+		process.exit(1);
+	}
+	console.log("Installer check passed (PowerShell installer validated; POSIX render skipped on Windows).");
+	process.exit(0);
+}
 
 if (mainCallIndex === -1) {
 	console.error('Installer render check failed: could not find final main "$@" call.');
@@ -39,7 +56,7 @@ print_render_meta() {
 }
 
 render_case() {
-	prime_agent_screen_title="Installing Prime Agent"
+	prime_agent_screen_title="Installing PiLoom"
 	prime_agent_screen_detail="Fetching the verified package."
 	prime_agent_screen_question=
 	prime_agent_screen_frame=1
@@ -82,13 +99,13 @@ screen_case() {
 	prime_agent_test_cols="$1"
 	prime_agent_test_rows="$2"
 	printf '__SCREEN_START__ first\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	prime_agent_screen "Installing PiLoom" "Installing PiLoom" "Fetching the verified package." ""
 	printf '__SCREEN_END__ first\\n' >&2
 
 	prime_agent_test_cols="$3"
 	prime_agent_test_rows="$4"
 	printf '__SCREEN_START__ second\\n' >&2
-	prime_agent_screen "Installing Prime Agent" "Installing Prime Agent" "Fetching the verified package." ""
+	prime_agent_screen "Installing PiLoom" "Installing PiLoom" "Fetching the verified package." ""
 	printf '__SCREEN_END__ second\\n' >&2
 }
 
@@ -98,7 +115,7 @@ Linking command binaries.
 Finalizing npm install."
 	for progress_frame in 1 24 25 48 49 200; do
 		prime_agent_animation_frame="$progress_frame"
-		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(prime_agent_animation_status "Installing Prime Agent" "$progress_details" static)" "$(prime_agent_animation_detail "$progress_details")"
+		printf '__PROGRESS__ %s\t%s\t%s\\n' "$progress_frame" "$(prime_agent_animation_status "Installing PiLoom" "$progress_details" static)" "$(prime_agent_animation_detail "$progress_details")"
 	done
 }
 
@@ -254,7 +271,7 @@ function assertInstallerProgress(progress) {
 			`expected progress sample ${index + 1} to show "${expectedDetail}", got "${progress[index].detail}"`,
 		);
 		check(
-			progress[index].status === "Installing Prime Agent...",
+			progress[index].status === "Installing PiLoom...",
 			`expected progress sample ${index + 1} to use indeterminate status`,
 		);
 		check(!progress[index].status.includes("%"), `expected progress sample ${index + 1} not to include a percent`);
@@ -296,6 +313,104 @@ function countNewlines(text) {
 function check(condition, message) {
 	if (!condition) {
 		failures.push(message);
+	}
+}
+
+function checkPowerShellInstaller(source) {
+	check(source.includes('$unconfiguredBaseUrl = "__PRIME_AGENT_DOWNLOAD_BASE_URL__"'), "PowerShell installer is missing the download URL sentinel");
+	check(source.includes('$unconfiguredDefaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_" + "CHANNEL__"'), "PowerShell installer is missing the release channel sentinel");
+	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
+	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
+	check(source.includes("MaximumRedirection = 0"), "PowerShell installer must reject download redirects");
+	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
+	check(source.includes('"$baseUrl/releases/v$version/SHA256SUMS.sig"'), "PowerShell installer must download the release signature");
+	check(source.includes("RSACryptoServiceProvider"), "PowerShell installer must verify the checksum manifest with its embedded RSA public key");
+	check(source.includes('$releaseSigningKeyId = "piloom-release-2026-08"'), "PowerShell installer is missing the expected release signing key ID");
+	check(
+		source.includes("Verify-ReleaseSignature $checksumPath $signaturePath"),
+		"PowerShell installer must authenticate the checksum manifest",
+	);
+	check(
+		source.indexOf("Verify-ReleaseSignature $checksumPath $signaturePath") < source.indexOf("Verify-Checksum $checksumPath $tarballPath"),
+		"PowerShell installer must authenticate the checksum manifest before trusting its archive hash",
+	);
+	check(source.includes('$downloadBaseUri.Scheme -ne "https"'), "PowerShell installer must require HTTPS downloads");
+	check(
+		source.includes("PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS"),
+		"PowerShell installer must require an explicit opt-in for insecure development downloads",
+	);
+	check(source.includes("install --global"), "PowerShell installer must install the package globally with npm");
+	check(source.includes('else { "piloom" }'), "PowerShell installer must expose piloom as the default command");
+	check(source.includes("npm prefix --global"), "PowerShell installer must resolve npm's global command directory");
+	check(source.includes('[Environment]::SetEnvironmentVariable("Path"'), "PowerShell installer must persist a missing user PATH entry");
+	check(source.includes('"$Name.cmd"'), "PowerShell installer must verify the generated Windows command shim");
+	check(source.includes("[guid]::NewGuid"), "PowerShell installer must use a unique temporary directory");
+	check(source.includes("Remove-Item -LiteralPath $temporaryDirectory"), "PowerShell installer must clean up its temporary directory");
+	check(!source.includes("curl -LsSf") && !source.includes("install.sh"), "PowerShell installer must not depend on the POSIX installer");
+}
+
+function checkPowerShellSignatureFixture(source) {
+	const mainStart = source.indexOf("if ($baseUrl -eq $unconfiguredBaseUrl)");
+	if (mainStart === -1) {
+		failures.push("PowerShell installer check could not isolate its function definitions");
+		return;
+	}
+
+	const temporaryDirectory = mkdtempSync(join(tmpdir(), "piloom-installer-signature-"));
+	const harnessPath = join(temporaryDirectory, "verify-signature.ps1");
+	const fixtureDirectory = join(process.cwd(), "scripts", "fixtures", "release-signing");
+	const quotePowerShell = (value) => value.replaceAll("'", "''");
+	const harness = `${source.slice(0, mainStart)}
+$fixtureDirectory = '${quotePowerShell(fixtureDirectory)}'
+$checksumPath = Join-Path $fixtureDirectory 'SHA256SUMS'
+$signaturePath = Join-Path $fixtureDirectory 'SHA256SUMS.sig'
+Verify-ReleaseSignature $checksumPath $signaturePath '0.0.0' 'stable'
+function Assert-SignatureRejected([scriptblock]$Action, [string]$Label) {
+	try {
+		& $Action
+	} catch {
+		return
+	}
+	throw "Release signature check accepted $Label."
+}
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $signaturePath '0.0.0' 'beta' } 'a substituted channel'
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $signaturePath '0.0.1' 'stable' } 'a substituted version'
+$tamperedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.tampered'
+Copy-Item -LiteralPath $checksumPath -Destination $tamperedPath
+[System.IO.File]::AppendAllText($tamperedPath, 'tampered')
+Assert-SignatureRejected { Verify-ReleaseSignature $tamperedPath $signaturePath '0.0.0' 'stable' } 'a tampered manifest'
+foreach ($variant in @('keyId', 'algorithm', 'signature', 'version', 'extra')) {
+	$variantEnvelope = Get-Content -LiteralPath $signaturePath -Raw | ConvertFrom-Json
+	switch ($variant) {
+		'keyId' { $variantEnvelope.keyId = 'wrong-key' }
+		'algorithm' { $variantEnvelope.algorithm = 'wrong-algorithm' }
+		'signature' { $variantEnvelope.signature = 'not-base64!' }
+		'version' { $variantEnvelope.version = 2 }
+		'extra' { $variantEnvelope | Add-Member -NotePropertyName extra -NotePropertyValue true }
+	}
+	$variantPath = Join-Path '${quotePowerShell(temporaryDirectory)}' "SHA256SUMS.$variant.sig"
+	$variantEnvelope | ConvertTo-Json -Compress | Set-Content -LiteralPath $variantPath -Encoding UTF8
+	Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $variantPath '0.0.0' 'stable' } "$variant variant"
+}
+$malformedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.malformed.sig'
+Set-Content -LiteralPath $malformedPath -Value '{' -Encoding ASCII
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $malformedPath '0.0.0' 'stable' } 'malformed JSON'
+$oversizedPath = Join-Path '${quotePowerShell(temporaryDirectory)}' 'SHA256SUMS.oversized.sig'
+[System.IO.File]::WriteAllText($oversizedPath, ('x' * 16385))
+Assert-SignatureRejected { Verify-ReleaseSignature $checksumPath $oversizedPath '0.0.0' 'stable' } 'an oversized envelope'
+`;
+	writeFileSync(harnessPath, harness);
+	try {
+		const result = spawnSync(
+			"powershell.exe",
+			["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harnessPath],
+			{ encoding: "utf8" },
+		);
+		if (result.status !== 0) {
+			failures.push(`PowerShell release signature fixture failed: ${(result.stderr || result.stdout).trim()}`);
+		}
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
 }
 

@@ -113,7 +113,9 @@ describe("telemetry identity and transport", () => {
 			version: 1,
 			installationId: first,
 		});
-		expect(statSync(path).mode & 0o777).toBe(0o600);
+		if (process.platform !== "win32") {
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+		}
 	});
 
 	it("replaces invalid persisted installation state", () => {
@@ -131,7 +133,7 @@ describe("telemetry identity and transport", () => {
 		expect(getOrCreateTelemetryInstallationId(agentDir, randomId)).toBe(installationId);
 	});
 
-	it("does not follow a telemetry state symlink", async () => {
+	it.runIf(process.platform !== "win32")("does not follow a telemetry state symlink", async () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "prime-agent-telemetry-"));
 		const targetPath = join(agentDir, "target.json");
 		const telemetryPath = join(agentDir, "telemetry.json");

@@ -76,6 +76,8 @@ function createHarness(
 		workers: new Map(),
 		clients: new Set(),
 		protocolClientIds: new WeakMap(),
+		windowsAuthenticationChallenges: new WeakMap(),
+		windowsAuthenticationTimeouts: new Map(),
 		promptAdmissions: new Map(),
 		mutationDrain: new MutationDrainLatch(),
 		commandJournal: options.commandJournal ?? {
@@ -483,6 +485,7 @@ describe("daemon supervisor prompt admission ownership", () => {
 		Object.assign(socket, { destroyed: false });
 		supervisor.handleConnection(socket);
 		const owner = [...supervisor.clients][0]!;
+		owner.authenticated = true;
 		const pendingPrompt = supervisor.handleLine(
 			owner,
 			commandLine({
@@ -551,6 +554,7 @@ describe("daemon supervisor prompt admission ownership", () => {
 		Object.assign(socket, { destroyed: false });
 		supervisor.handleConnection(socket);
 		const owner = [...supervisor.clients][0]!;
+		owner.authenticated = true;
 		const pendingPrompt = supervisor.handleLine(
 			owner,
 			commandLine({

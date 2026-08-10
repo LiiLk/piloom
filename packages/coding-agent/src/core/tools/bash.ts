@@ -68,14 +68,16 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 		exec: (command, cwd, { onData, signal, timeout, env }) => {
 			return new Promise((resolve, reject) => {
 				const { shell, args } = getShellConfig(options?.shellPath);
+				const isWindows = process.platform === "win32";
 				if (!existsSync(cwd)) {
 					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
 					return;
 				}
 				const child = spawn(shell, [...args, command], {
 					cwd,
-					detached: process.platform !== "win32",
-					env: env ?? getShellEnv(),
+					detached: !isWindows,
+					windowsHide: isWindows,
+					env: env ?? getShellEnv(shell),
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 				if (child.pid) trackDetachedChildPid(child.pid);
@@ -135,8 +137,13 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
-function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawnHook): BashSpawnContext {
-	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+function resolveSpawnContext(
+	command: string,
+	cwd: string,
+	spawnHook?: BashSpawnHook,
+	shellPath?: string,
+): BashSpawnContext {
+	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv(shellPath) } };
 	return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -295,7 +302,7 @@ export function createBashToolDefinition(
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;

@@ -13,6 +13,7 @@ import {
 } from "../core/orphan-process-journal.js";
 import { SESSION_LEASE_OWNER_ID_ENV, SESSION_LEASES_ENABLED_ENV } from "../core/session-lease.js";
 import { attachJsonlLineReader, serializeJsonLine } from "../modes/rpc/jsonl.js";
+import { killProcessTree } from "../utils/shell.js";
 import { isHelpCommandRequest, PUBLIC_COMMAND_NAMES, REMOVED_COMMAND_NAMES } from "./command-registry.js";
 import { type CliSubprocessLaunchSpec, createCliSubprocessLaunchSpec } from "./subprocess-launch.js";
 
@@ -301,8 +302,12 @@ export async function runOwnedSessionWorkerFrontend(
 				continue;
 			}
 			const { pid } = orphan;
+			if (process.platform === "win32") {
+				killProcessTree(pid);
+				continue;
+			}
 			try {
-				process.kill(process.platform === "win32" ? pid : -pid, "SIGKILL");
+				process.kill(-pid, "SIGKILL");
 			} catch {
 				try {
 					process.kill(pid, "SIGKILL");
@@ -356,6 +361,7 @@ export async function runOwnedSessionWorkerFrontend(
 				[SESSION_LEASE_OWNER_ID_ENV]: `owned-${randomUUID()}`,
 			},
 			stdio,
+			windowsHide: !interactive && process.platform === "win32",
 		});
 		currentChild = child;
 		if (!interactive) {

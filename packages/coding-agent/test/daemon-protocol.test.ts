@@ -17,6 +17,7 @@ import {
 	type DaemonCommand,
 	type DaemonOutbound,
 	getDaemonCommandCompatibilities,
+	getDaemonSupervisorServerCapabilities,
 	isDaemonCommandEnvelope,
 	isDaemonMutatingCommand,
 	salvageDaemonCommandId,
@@ -45,7 +46,7 @@ describe("daemon protocol helpers", () => {
 	});
 
 	it("requires compatibility metadata for the heartbeat protocol surface", () => {
-		expect(DAEMON_PROTOCOL_VERSION).toBe(7);
+		expect(DAEMON_PROTOCOL_VERSION).toBe(9);
 		expect(DAEMON_SCHEMA_ID).toContain(`protocol-${DAEMON_PROTOCOL_VERSION}`);
 		expect(DAEMON_COMMAND_COMPATIBILITY.heartbeats_list).toEqual({
 			minProtocol: 7,
@@ -66,6 +67,20 @@ describe("daemon protocol helpers", () => {
 		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).toEqual(
 			expect.arrayContaining(["heartbeat_catalog", "heartbeat_management"]),
 		);
+	});
+
+	it("requires capability-gated authentication only for the public Windows supervisor", () => {
+		expect(DAEMON_COMMAND_COMPATIBILITY.daemon_auth).toEqual({
+			minProtocol: 9,
+			minSchemaRevision: 17,
+			capability: "windows_transport_auth",
+		});
+		expect(getDaemonSupervisorServerCapabilities("win32")).toEqual([
+			...DAEMON_DEFAULT_SERVER_CAPABILITIES,
+			"windows_transport_auth",
+		]);
+		expect(getDaemonSupervisorServerCapabilities("linux")).toBe(DAEMON_DEFAULT_SERVER_CAPABILITIES);
+		expect(DAEMON_DEFAULT_SERVER_CAPABILITIES).not.toContain("windows_transport_auth");
 	});
 
 	it("capability-gates explicit subagent deletion instead of schema-gating it", () => {

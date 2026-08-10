@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const toolState = vi.hoisted(() => ({
-	toolsDir: `/tmp/prime-agent-tools-manager-${process.pid}`,
+	toolsDir: `${process.env.TEMP ?? process.env.TMP ?? "."}/prime-agent-tools-manager-${process.pid}`,
 	platform: "linux",
 	architecture: "x64",
 	extractZip: async (_source: string, _options: { dir: string }): Promise<void> => {},
@@ -33,10 +33,23 @@ import {
 const originalPath = process.env.PATH;
 const originalOffline = process.env.PI_OFFLINE;
 const pathDir = join(toolState.toolsDir, "path");
+const actualPlatform = process.platform;
 
 function writeExecutable(filePath: string, exitCode = 0): void {
+	if (actualPlatform === "win32") {
+		if (exitCode === 0) {
+			copyFileSync(process.execPath, filePath);
+		} else {
+			writeFileSync(filePath, "not a Windows executable", "utf8");
+		}
+		return;
+	}
 	writeFileSync(filePath, `#!/bin/sh\nexit ${exitCode}\n`, "utf8");
 	chmodSync(filePath, 0o755);
+}
+
+function toolBinaryPath(directory: string, name: string): string {
+	return join(directory, `${name}${toolState.platform === "win32" ? ".exe" : ""}`);
 }
 
 function unavailable(
@@ -52,7 +65,7 @@ describe("tools manager", () => {
 		mkdirSync(pathDir, { recursive: true });
 		process.env.PATH = pathDir;
 		delete process.env.PI_OFFLINE;
-		toolState.platform = "linux";
+		toolState.platform = actualPlatform === "win32" ? "win32" : "linux";
 		toolState.architecture = "x64";
 		toolState.extractZip = async () => {};
 	});
@@ -67,12 +80,12 @@ describe("tools manager", () => {
 	});
 
 	it("accepts managed and PATH tools only when their version check succeeds", () => {
-		const managedPath = join(toolState.toolsDir, "rg");
+		const managedPath = toolBinaryPath(toolState.toolsDir, "rg");
 		writeExecutable(managedPath);
 		expect(getToolPath("rg")).toBe(managedPath);
 
 		writeExecutable(managedPath, 1);
-		const pathBinary = join(pathDir, "rg");
+		const pathBinary = toolBinaryPath(pathDir, "rg");
 		writeExecutable(pathBinary);
 		expect(getToolPath("rg")).toBe("rg");
 
@@ -85,7 +98,7 @@ describe("tools manager", () => {
 		await expect(ensureToolWithStatus("rg")).resolves.toMatchObject({
 			status: "unavailable",
 			reason: "offline",
-			platform: "linux",
+			platform: toolState.platform,
 		});
 
 		delete process.env.PI_OFFLINE;

@@ -1,6 +1,4 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { AuthStatus } from "../../core/auth-storage.js";
-import { PRIME_INFERENCE_PROVIDER_ID } from "../../core/prime-inference-auth.js";
 
 export interface OnboardingSettingsReader {
 	getOnboardingShown(): boolean;
@@ -9,7 +7,6 @@ export interface OnboardingSettingsReader {
 export interface OnboardingModelRegistryReader {
 	refresh(): void;
 	hasConfiguredAuth(model: Model<Api>): boolean;
-	getProviderAuthStatus(provider: string): AuthStatus;
 }
 
 export interface OnboardingStartupState {
@@ -18,15 +15,9 @@ export interface OnboardingStartupState {
 	model: Model<Api> | undefined;
 }
 
+/** Selects the branded model-picker branch; the legacy name remains internal to the existing startup flow. */
 export function shouldRunPrimeCliOnboardingSplash(state: OnboardingStartupState): boolean {
-	if (state.settingsManager.getOnboardingShown()) {
-		return false;
-	}
-	if (!state.model || state.model.provider !== PRIME_INFERENCE_PROVIDER_ID) {
-		return false;
-	}
-	const authStatus = state.modelRegistry.getProviderAuthStatus(PRIME_INFERENCE_PROVIDER_ID);
-	return authStatus.source === "prime_cli";
+	return !state.settingsManager.getOnboardingShown();
 }
 
 export function isOnboardingModelReady(state: OnboardingStartupState): boolean {

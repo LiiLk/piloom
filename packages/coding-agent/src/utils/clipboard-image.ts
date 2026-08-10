@@ -98,6 +98,7 @@ function runCommand(
 		timeout: timeoutMs,
 		maxBuffer: maxBufferBytes,
 		env: options?.env,
+		windowsHide: process.platform === "win32",
 	});
 
 	if (result.error) {

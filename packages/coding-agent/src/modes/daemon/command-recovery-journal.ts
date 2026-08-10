@@ -41,6 +41,20 @@ export type CommandJournalBeginResult =
 
 const COMPACT_AFTER_RECORDS = 4096;
 
+function syncDirectoryAfterRename(directory: string): void {
+	if (process.platform === "win32") {
+		// Windows does not support fsync on directory handles. The replacement file
+		// was already fsynced before the rename, so directory metadata sync is best effort.
+		return;
+	}
+	const directoryDescriptor = openSync(directory, "r");
+	try {
+		fsyncSync(directoryDescriptor);
+	} finally {
+		closeSync(directoryDescriptor);
+	}
+}
+
 export function createCommandIdempotencyKey(clientId: DaemonClientId, commandId: DaemonCommandId): string {
 	return JSON.stringify([clientId, commandId]);
 }
@@ -206,12 +220,7 @@ export class CommandRecoveryJournal {
 			closeSync(descriptor);
 		}
 		renameSync(tempPath, this.path);
-		const directoryDescriptor = openSync(dirname(this.path), "r");
-		try {
-			fsyncSync(directoryDescriptor);
-		} finally {
-			closeSync(directoryDescriptor);
-		}
+		syncDirectoryAfterRename(dirname(this.path));
 		this.recordCount = records.length;
 	}
 }

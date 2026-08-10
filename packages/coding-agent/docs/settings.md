@@ -87,9 +87,9 @@ Disable analytics with any of:
 ```
 
 ```bash
-PRIME_AGENT_TELEMETRY=0 prime-agent
-DO_NOT_TRACK=1 prime-agent
-prime-agent --offline
+PRIME_AGENT_TELEMETRY=0 piloom
+DO_NOT_TRACK=1 piloom
+piloom --offline
 ```
 
 `PRIME_AGENT_TELEMETRY_ENDPOINT` overrides the ingestion endpoint for development and self-hosted deployments.
@@ -248,7 +248,7 @@ Paths in `~/.prime/agent/settings.json` resolve relative to `~/.prime/agent`. Pa
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
-| `enableBuiltinSkills` | boolean | `true` | Load built-in skills shipped with prime-agent |
+| `enableBuiltinSkills` | boolean | `true` | Load built-in skills shipped with piloom |
 | `bundledSkills.websearch` | boolean | `true` | Load the built-in `websearch` skill |
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.

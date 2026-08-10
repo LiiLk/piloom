@@ -1,9 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	type DaemonInfo,
 	evaluateShutdownQuietPeriod,
 	isWorkerSocketPath,
+	mapDaemonSupervisorOwnersToProcesses,
 	mergeDiscoveredDaemonProcesses,
 	parseLsofListeners,
 	parsePrimeAgentProcessIds,
@@ -17,6 +20,63 @@ import {
 } from "../src/cli/daemon-ps.js";
 import { getProcessStartId } from "../src/core/session-lease.js";
 import { defaultDaemonSocketDir } from "../src/modes/daemon/daemon-socket.js";
+import { readDaemonSupervisorOwnerSnapshot } from "../src/modes/daemon/daemon-supervisor-ownership.js";
+
+describe("readDaemonSupervisorOwnerSnapshot", () => {
+	it("returns valid owner identities and ignores malformed registry records", () => {
+		const registryDir = mkdtempSync(join(tmpdir(), "prime-agent-owner-snapshot-"));
+		try {
+			writeOwnerRecord(registryDir, "valid", makeOwnerRecord());
+			writeOwnerRecord(registryDir, "invalid-pid", makeOwnerRecord({ generation: "invalid-pid", pid: 0 }));
+			writeOwnerRecord(registryDir, "wrong-directory", makeOwnerRecord({ generation: "elsewhere" }));
+			const malformedDirectory = join(registryDir, "malformed.owner");
+			mkdirSync(malformedDirectory);
+			writeFileSync(join(malformedDirectory, "owner.json"), "not json");
+
+			expect(readDaemonSupervisorOwnerSnapshot(registryDir)).toEqual([
+				{ pid: 1234, processStartId: "win:123", socketPath: "\\\\.\\pipe\\prime-agent-valid" },
+			]);
+			expect(readDaemonSupervisorOwnerSnapshot(join(registryDir, "missing"))).toEqual([]);
+		} finally {
+			rmSync(registryDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("mapDaemonSupervisorOwnersToProcesses", () => {
+	const owners = [
+		{ pid: 1234, processStartId: "win:123", socketPath: "\\\\.\\pipe\\prime-agent-current" },
+		{ pid: 5678, processStartId: "win:old", socketPath: "\\\\.\\pipe\\prime-agent-reused" },
+		{ pid: 9012, socketPath: "\\\\.\\pipe\\prime-agent-dead" },
+		{ pid: 3456, socketPath: "\\\\.\\pipe\\prime-agent-unverified" },
+	];
+
+	it("maps only live Windows owners whose recorded process identity still matches", () => {
+		expect(
+			mapDaemonSupervisorOwnersToProcesses(
+				owners,
+				"win32",
+				(pid) => (pid === 1234 ? "win:123" : "win:new"),
+				(pid) => pid !== 9012,
+			),
+		).toEqual([{ pid: 1234, socketPath: "\\\\.\\pipe\\prime-agent-current" }]);
+	});
+
+	it("does not map registry owners into POSIX listener discovery", () => {
+		expect(
+			mapDaemonSupervisorOwnersToProcesses(
+				owners,
+				"linux",
+				() => {
+					throw new Error("process identity should not be queried");
+				},
+				() => {
+					throw new Error("process liveness should not be queried");
+				},
+			),
+		).toEqual([]);
+	});
+});
 
 describe("worker socket classification", () => {
 	it.runIf(process.platform !== "win32")("recognizes only worker sockets in the default service directory", () => {
@@ -260,6 +320,47 @@ describe("planShutdownConfirmation", () => {
 		expect(planShutdownConfirmation(0, false, false, true)).toBe("none");
 	});
 });
+
+interface OwnerRecordFixture {
+	version: 1;
+	role: "supervisor";
+	token: string;
+	generation: string;
+	pid: number;
+	processStartId?: string;
+	socketPath: string;
+	descriptorDir: string;
+	agentDir: string;
+	appVersion: string;
+	phase: "starting" | "owner" | "stopping";
+	createdAt: string;
+	updatedAt: string;
+}
+
+function makeOwnerRecord(overrides: Partial<OwnerRecordFixture> = {}): OwnerRecordFixture {
+	return {
+		version: 1,
+		role: "supervisor",
+		token: "owner-token",
+		generation: "valid",
+		pid: 1234,
+		processStartId: "win:123",
+		socketPath: "\\\\.\\pipe\\prime-agent-valid",
+		descriptorDir: "C:\\agent\\daemon",
+		agentDir: "C:\\agent",
+		appVersion: "1.0.0",
+		phase: "owner",
+		createdAt: "2026-08-08T00:00:00.000Z",
+		updatedAt: "2026-08-08T00:00:00.000Z",
+		...overrides,
+	};
+}
+
+function writeOwnerRecord(registryDir: string, directoryName: string, owner: OwnerRecordFixture): void {
+	const directory = join(registryDir, `${directoryName}.owner`);
+	mkdirSync(directory);
+	writeFileSync(join(directory, "owner.json"), `${JSON.stringify(owner)}\n`);
+}
 
 function makeDaemon(options: Partial<DaemonInfo> & { socketPath: string; status: DaemonInfo["status"] }): DaemonInfo {
 	return {

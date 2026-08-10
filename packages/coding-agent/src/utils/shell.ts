@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { delimiter } from "node:path";
-import { spawn, spawnSync } from "child_process";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
 import { recordOrphanProcessState } from "../core/orphan-process-journal.js";
 
@@ -14,24 +14,38 @@ export interface ShellConfig {
  */
 function findBashOnPath(): string | null {
 	if (process.platform === "win32") {
-		// Windows: Use 'where' and verify file exists (where can return non-existent paths)
-		try {
-			const result = spawnSync("where", ["bash.exe"], { encoding: "utf-8", timeout: 5000 });
-			if (result.status === 0 && result.stdout) {
-				const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-				if (firstMatch && existsSync(firstMatch)) {
-					return firstMatch;
-				}
+		// Do not spawn `where.exe`: Win32 executable lookup checks the current
+		// directory before PATH, so a repository-controlled binary could run.
+		const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+		const seen = new Set<string>();
+		for (const rawEntry of (process.env[pathKey] ?? "").split(delimiter)) {
+			const entry = rawEntry.trim().replace(/^"(.*)"$/, "$1");
+			if (!entry || !isAbsolute(entry)) continue;
+			const normalized = entry.toLowerCase();
+			if (seen.has(normalized)) continue;
+			seen.add(normalized);
+			const candidate = join(entry, "bash.exe");
+			if (!existsSync(candidate)) continue;
+			try {
+				const probe = spawnSync(candidate, ["-c", "exit 0"], {
+					stdio: "ignore",
+					timeout: 5000,
+					windowsHide: true,
+				});
+				if (probe.status === 0) return candidate;
+			} catch {
+				// Continue to the next absolute PATH candidate.
 			}
-		} catch {
-			// Ignore errors
 		}
 		return null;
 	}
 
 	// Unix: Use 'which' and trust its output (handles Termux and special filesystems)
 	try {
-		const result = spawnSync("which", ["bash"], { encoding: "utf-8", timeout: 5000 });
+		const result = spawnSync("which", ["bash"], {
+			encoding: "utf-8",
+			timeout: 5000,
+		});
 		if (result.status === 0 && result.stdout) {
 			const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
 			if (firstMatch) {
@@ -63,13 +77,25 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	if (process.platform === "win32") {
 		// 2. Try Git Bash in known locations
 		const paths: string[] = [];
-		const programFiles = process.env.ProgramFiles;
-		if (programFiles) {
-			paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
+		const addGitBashPath = (...parts: string[]) => {
+			const path = join(...parts);
+			if (!paths.includes(path)) paths.push(path);
+		};
+		for (const programFiles of [
+			process.env.ProgramFiles,
+			process.env.ProgramW6432,
+			process.env["ProgramFiles(x86)"],
+		]) {
+			if (programFiles) {
+				// Git for Windows ships a launcher in bin and the actual MSYS2
+				// shell in usr/bin. Prefer the actual runtime when it is present.
+				addGitBashPath(programFiles, "Git", "usr", "bin", "bash.exe");
+				addGitBashPath(programFiles, "Git", "bin", "bash.exe");
+			}
 		}
-		const programFilesX86 = process.env["ProgramFiles(x86)"];
-		if (programFilesX86) {
-			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
+		if (process.env.LOCALAPPDATA) {
+			addGitBashPath(process.env.LOCALAPPDATA, "Programs", "Git", "usr", "bin", "bash.exe");
+			addGitBashPath(process.env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe");
 		}
 
 		for (const path of paths) {
@@ -106,17 +132,47 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	return { shell: "sh", args: ["-c"] };
 }
 
-export function getShellEnv(): NodeJS.ProcessEnv {
+function getWindowsShellDirectories(shellPath?: string): string[] {
+	const candidates = shellPath
+		? [shellPath]
+		: [
+				process.env.ProgramFiles ? join(process.env.ProgramFiles, "Git", "usr", "bin", "bash.exe") : undefined,
+				process.env.ProgramW6432 ? join(process.env.ProgramW6432, "Git", "usr", "bin", "bash.exe") : undefined,
+				process.env["ProgramFiles(x86)"]
+					? join(process.env["ProgramFiles(x86)"], "Git", "usr", "bin", "bash.exe")
+					: undefined,
+				process.env.LOCALAPPDATA
+					? join(process.env.LOCALAPPDATA, "Programs", "Git", "usr", "bin", "bash.exe")
+					: undefined,
+			];
+	return [
+		...new Set(
+			candidates
+				.filter((candidate): candidate is string => Boolean(candidate))
+				.filter((candidate) => existsSync(candidate))
+				.map((candidate) => dirname(candidate)),
+		),
+	];
+}
+
+export function getShellEnv(shellPath?: string): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
 	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 	const currentPath = process.env[pathKey] ?? "";
 	const pathEntries = currentPath.split(delimiter).filter(Boolean);
-	const hasBinDir = pathEntries.includes(binDir);
-	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);
+	const extraDirectories = process.platform === "win32" ? getWindowsShellDirectories(shellPath) : [];
+	for (const directory of [binDir, ...extraDirectories].reverse()) {
+		const hasDirectory = pathEntries.some((entry) =>
+			process.platform === "win32" ? entry.toLowerCase() === directory.toLowerCase() : entry === directory,
+		);
+		if (!hasDirectory) {
+			pathEntries.unshift(directory);
+		}
+	}
 
 	return {
 		...process.env,
-		[pathKey]: updatedPath,
+		[pathKey]: pathEntries.join(delimiter),
 	};
 }
 
@@ -184,19 +240,37 @@ export function killTrackedDetachedChildren(): void {
 	trackedDetachedChildPids.clear();
 }
 
+export function resolveWindowsSystem32Executable(name: "taskkill.exe"): string | undefined {
+	const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+	if (!windowsRoot || !isAbsolute(windowsRoot)) return undefined;
+	const executable = join(windowsRoot, "System32", name);
+	return existsSync(executable) ? executable : undefined;
+}
+
 /**
  * Kill a process and all its children (cross-platform)
  */
 export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
-		// Use taskkill on Windows to kill process tree
+		const taskkill = resolveWindowsSystem32Executable("taskkill.exe");
 		try {
-			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-				stdio: "ignore",
-				detached: true,
-			});
+			const result =
+				taskkill &&
+				spawnSync(taskkill, ["/F", "/T", "/PID", String(pid)], {
+					stdio: "ignore",
+					timeout: 10_000,
+					windowsHide: true,
+				});
+			if (result && result.status === 0) {
+				return;
+			}
 		} catch {
-			// Ignore errors if taskkill fails
+			// Fall through to the direct process signal.
+		}
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch {
+			// The process may already be fully reaped.
 		}
 	} else {
 		// Use SIGKILL on Unix/Linux/Mac

@@ -4,27 +4,27 @@ See the repository [AGENTS.md](../../../AGENTS.md) for the current contribution 
 
 ## Setup
 
-Prime Agent requires Node.js 22.8.0 or newer.
+PiLoom requires Node.js 22.8.0 or newer.
 
 ```bash
-git clone https://github.com/PrimeIntellect-ai/prime-agent
-cd prime-agent
+git clone https://github.com/LiiLk/piloom
+cd piloom
 npm ci
 ```
 
 Run from source:
 
 ```bash
-/path/to/prime-agent/prime-agent.sh
+/path/to/piloom/prime-agent.sh
 ```
 
 The script can be called from any directory and preserves the caller's working directory. Use that behavior to run a source checkout against a separate test project.
 
 ## Product and Source Names
 
-Prime Agent is the product, public CLI, release artifact, and repository name. The monorepo still retains inherited `@earendil-works/pi-*` npm workspace names, a source-package `pi` bin entry, the `pi` package manifest key, and some `PI_*` compatibility environment variables. These names are source and compatibility details, not a signal that contributors should install or develop against pi-mono.
+PiLoom is the product, public CLI, release artifact, and repository name. The monorepo still retains inherited `@earendil-works/pi-*` npm workspace names, the internal `prime-agent` identity, the `pi` package manifest key, and `PI_*`/`PRIME_AGENT_*` compatibility environment variables. These names are source and compatibility details, not public command names.
 
-Public releases are currently versioned tarball artifacts installed by the stable and beta installer scripts. `scripts/pack-prime-agent-release.mjs` rewrites the coding-agent package name, executable, config metadata, and internal dependency URLs for that distribution. Do not document the inherited npm workspace package as the public Prime Agent install path.
+Public releases are currently versioned tarball artifacts installed by the stable and beta installer scripts. `scripts/pack-prime-agent-release.mjs` rewrites the coding-agent package name, executable, config metadata, and internal dependency URLs for that distribution. Do not document the inherited npm workspace package as the public PiLoom install path.
 
 ## Local Configuration
 
@@ -33,7 +33,7 @@ User configuration lives under `~/.prime/agent/`. Project-local settings, prompt
 Use an isolated config directory when manually exercising daemon behavior so development sessions do not collide with normal sessions:
 
 ```bash
-PRIME_AGENT_CODING_AGENT_DIR=/tmp/prime-agent-dev /path/to/prime-agent/prime-agent.sh
+PRIME_AGENT_CODING_AGENT_DIR=/tmp/piloom-dev /path/to/piloom/prime-agent.sh
 ```
 
 ## Daemon Protocol Changes
@@ -42,7 +42,7 @@ Classify every daemon command, event, or response-shape change as backward-compa
 
 ## Package Asset Resolution
 
-Prime Agent runs from source, Node.js package output, and standalone release artifacts. Always use `src/config.ts` helpers for package assets:
+PiLoom runs from source, Node.js package output, and standalone release artifacts. Always use `src/config.ts` helpers for package assets:
 
 ```typescript
 import { getPackageDir, getThemeDir } from "./config.js";
@@ -57,10 +57,10 @@ The hidden `/debug` command writes `~/.prime/agent/prime-agent-debug.log` with r
 Useful service commands:
 
 ```bash
-prime-agent status
-prime-agent doctor
-prime-agent doctor --fix
-prime-agent shutdown
+piloom status
+piloom doctor
+piloom doctor --fix
+piloom shutdown
 ```
 
 ## Validation

@@ -1,5 +1,5 @@
 import { type Component, getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { PRIME_BUTTERFLY_LOGO } from "../../../themes/prime-logo.js";
+import { PILOOM_LOGO } from "../../../themes/prime-logo.js";
 import { type ThemeColor, theme } from "../theme/theme.js";
 
 interface PrimeOnboardingSplashOptions {
@@ -9,7 +9,7 @@ interface PrimeOnboardingSplashOptions {
 	continueActionLabel?: string;
 }
 
-const LOGO_LINES = PRIME_BUTTERFLY_LOGO.split("\n");
+const LOGO_LINES = PILOOM_LOGO.split("\n");
 const LOGO_WIDTH = LOGO_LINES.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
 const ANIMATION_INTERVAL_MS = 120;
 const LAB_FIELD_HEIGHT = 14;
@@ -115,7 +115,7 @@ export class PrimeOnboardingSplashComponent implements Component {
 		if (this.progressMessage) {
 			return [{ text: this.progressMessage, tone: "muted" }];
 		}
-		const actionLabel = this.options.continueActionLabel ?? "login with Prime Intellect";
+		const actionLabel = this.options.continueActionLabel ?? "choose a model";
 		return [
 			{ text: "Press ", tone: "muted" },
 			{ text: "Enter", tone: "accent", bold: true },
@@ -126,8 +126,8 @@ export class PrimeOnboardingSplashComponent implements Component {
 	private formatBrandLine(): PanelTextLine {
 		return [
 			{ text: "Welcome to ", tone: "text" },
-			{ text: "PRIME", tone: "text", bold: true },
-			{ text: " Agent", tone: "text", italic: true },
+			{ text: "Pi", tone: "accent", bold: true },
+			{ text: "Loom", tone: "text", bold: true },
 		];
 	}
 

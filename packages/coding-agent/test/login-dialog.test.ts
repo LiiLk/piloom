@@ -67,7 +67,16 @@ describe("LoginDialogComponent", () => {
 
 			dialog.showAuth(url);
 
-			expect(mocks.execFile).toHaveBeenCalledWith(command, [...prefixArgs, url], expect.any(Function));
+			if (platform === "win32") {
+				expect(mocks.execFile).toHaveBeenCalledWith(
+					command,
+					[...prefixArgs, url],
+					{ windowsHide: true },
+					expect.any(Function),
+				);
+			} else {
+				expect(mocks.execFile).toHaveBeenCalledWith(command, [...prefixArgs, url], expect.any(Function));
+			}
 		} finally {
 			platformSpy.mockRestore();
 		}

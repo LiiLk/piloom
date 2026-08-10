@@ -52,6 +52,8 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
+	/** Per-run project trust override. */
+	projectTrustOverride?: boolean;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
@@ -294,6 +296,10 @@ export function parseArgs(args: string[]): Args {
 			result.verbose = true;
 		} else if (arg === "--offline") {
 			result.offline = true;
+		} else if (arg === "--approve" || arg === "-a") {
+			result.projectTrustOverride = true;
+		} else if (arg === "--no-approve" || arg === "-na") {
+			result.projectTrustOverride = false;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {

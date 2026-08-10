@@ -7,10 +7,13 @@ import { type DaemonCommand, type DaemonResponse, failure, success } from "../sr
 import { DaemonSupervisor } from "../src/modes/daemon/daemon-supervisor.js";
 
 interface SupervisorHarness {
+	clients: Set<DaemonSocketClient>;
 	workers: Map<string, unknown>;
+	broadcastHeartbeatsChanged(): void;
 	forwardToWorker(worker: unknown, command: DaemonCommand, timeoutMs?: number): Promise<DaemonResponse>;
 	handleCommand(client: DaemonSocketClient, command: DaemonCommand): Promise<DaemonResponse | undefined>;
 	handleWorkerFrame(worker: unknown, frame: unknown): void;
+	write(client: DaemonSocketClient, message: unknown): boolean;
 }
 
 const tempDirs: string[] = [];
@@ -38,6 +41,20 @@ function worker(lifecycle: "ready" | "recovering", connected = true) {
 }
 
 describe("daemon supervisor heartbeat aggregation", () => {
+	it("broadcasts heartbeat changes only to authenticated clients", () => {
+		const supervisor = createSupervisorHarness();
+		const authenticated = { authenticated: true } as DaemonSocketClient;
+		const unauthenticated = { authenticated: false } as DaemonSocketClient;
+		supervisor.clients.add(authenticated);
+		supervisor.clients.add(unauthenticated);
+		supervisor.write = vi.fn(() => true);
+
+		supervisor.broadcastHeartbeatsChanged();
+
+		expect(supervisor.write).toHaveBeenCalledOnce();
+		expect(supervisor.write).toHaveBeenCalledWith(authenticated, { type: "heartbeats_changed" });
+	});
+
 	it("uses the last complete worker snapshot during recovery", async () => {
 		const supervisor = createSupervisorHarness();
 		const first = worker("ready");

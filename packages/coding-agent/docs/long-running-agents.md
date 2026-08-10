@@ -49,19 +49,19 @@ Normal interactive sessions run in resident worker processes managed by a local 
 Closing the terminal UI detaches the client; it does not stop the worker. List and reconnect to active agents with:
 
 ```bash
-prime-agent list
-prime-agent attach <agent>
+piloom list
+piloom attach <agent>
 ```
 
 Other lifecycle commands are:
 
 ```bash
-prime-agent agents                  # Open the agents view
-prime-agent rename <agent> <name>   # Give an agent a stable readable name
-prime-agent stop <agent>            # Stop one agent
-prime-agent status                  # Inspect background services
-prime-agent doctor [--fix]          # Diagnose or repair service state
-prime-agent shutdown [--force]      # Stop all agents and services
+piloom agents                  # Open the agents view
+piloom rename <agent> <name>   # Give an agent a stable readable name
+piloom stop <agent>            # Stop one agent
+piloom status                  # Inspect background services
+piloom doctor [--fix]          # Diagnose or repair service state
+piloom shutdown [--force]      # Stop all agents and services
 ```
 
 Workers persist transcripts as JSONL and store feature-specific state under the session artifact directory. A worker or supervisor restart can recover session state and schedules and rehydrate retained completed RLM children without treating a terminal client as the owner of the work.
@@ -73,7 +73,7 @@ Daemon workers are process-isolated for lifecycle and failure containment, not s
 The daemon routes direct messages between active sessions and retained daemon-backed subagents. From a shell:
 
 ```bash
-prime-agent send <agent> "Please verify the latest migration"
+piloom send <agent> "Please verify the latest migration"
 ```
 
 From the IPython kernel, use the preloaded `agent_message` Python skill:
@@ -117,7 +117,7 @@ Prime Agent has three related scheduling surfaces:
 |---|---|---|
 | `/heartbeat` | User | One visible recurring instruction for the current session. |
 | `rlm_heartbeat` | Agent | Multiple programmatically managed recurring instructions internal to the current session. |
-| `prime-agent schedule` | User or automation | General one-time or cron prompts targeted at an agent. |
+| `piloom schedule` | User or automation | General one-time or cron prompts targeted at an agent. |
 
 ### User heartbeat
 
@@ -161,10 +161,10 @@ RLM heartbeats are distinct from the user's `/heartbeat`; the Python skill canno
 Schedule a one-time or recurring prompt for an addressable agent:
 
 ```bash
-prime-agent schedule add worker "in 30m" -- "Check the benchmark result"
-prime-agent schedule add worker "0 9 * * 1-5" -- "Review open work"
-prime-agent schedule list --all
-prime-agent schedule cancel <job-id>
+piloom schedule add worker "in 30m" -- "Check the benchmark result"
+piloom schedule add worker "0 9 * * 1-5" -- "Review open work"
+piloom schedule list --all
+piloom schedule cancel <job-id>
 ```
 
 Scheduled jobs are persisted per session and continue while the UI is detached. Due ticks are claimed before delivery so a crash does not replay an uncertain prompt, and missed ticks are coalesced rather than accumulated into an unbounded backlog.
@@ -211,7 +211,7 @@ Enable it in an interactive session:
 Or configure a run from the CLI:
 
 ```bash
-prime-agent \
+piloom \
   --autonomous \
   --autonomous-gate "npm run check" \
   --autonomous-max-turns 20 \

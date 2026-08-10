@@ -164,6 +164,7 @@ async function walkDirectoryWithFd(
 
 		const child = spawn(fdPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: process.platform === "win32",
 		});
 		let stdout = "";
 		let resolved = false;

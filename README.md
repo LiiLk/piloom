@@ -42,9 +42,9 @@ PiLoom combines a persistent Python control environment with durable harness sta
 
 ## Project status
 
-PiLoom is at the foundation stage of its cross-platform work, with Windows as its first platform target. The upstream behavior and architecture are being retained while platform compatibility is addressed incrementally. The current roadmap includes Windows-safe directory synchronization, Python virtual-environment discovery, a native `uv` installation path, Windows CI and release jobs, and Windows daemon/lifecycle coverage.
+PiLoom is at the foundation stage of its cross-platform work, with Windows as its first platform target. The upstream behavior and architecture are being retained while platform compatibility is addressed incrementally. The Windows foundation now covers safe directory synchronization, platform-specific Python virtual-environment discovery, a native `uv` installation path, Windows CI/release verification, DPAPI-authenticated named-pipe daemon lifecycle, Job Object cleanup for frontend-owned workers, and a hosted native Windows binary artifact. Broader hosted process-stress coverage remains follow-up work.
 
-Until that work is complete, the existing Unix installer and some development paths remain upstream-oriented. Check the project issues and development documentation before relying on this fork for production Windows use.
+The public CLI command is `piloom`. Check the project issues and development documentation before relying on this fork for production Windows use.
 
 ## Getting Started
 
@@ -63,12 +63,28 @@ Start the agent from the repository or directory it should work in:
 
 ```bash
 cd /path/to/project
-prime-agent
+piloom
 ```
 
 On first launch, run `/login` to choose a subscription or API-key provider. PiLoom works in the current directory and can run commands and modify files there. Use a disposable clone, clean worktree, or another checkpoint you can inspect and restore.
 
-The current CLI executable remains `prime-agent`; the repository and project identity are PiLoom.
+Published installers add `piloom` to the command path; launch it from the project directory you want PiLoom to work in.
+
+### Windows from source
+
+On Windows, use Node.js 22.8.0 or newer and PowerShell:
+
+```powershell
+git clone https://github.com/LiiLk/piloom.git
+cd piloom
+npm.cmd ci
+npm.cmd run build
+node packages/coding-agent/dist/bundle/cli.js
+```
+
+Published releases also include a native `install.ps1` installer. The release workflow renders its download host and publishes stable and beta variants alongside the POSIX installers. Both installers pin PiLoom's release public key and reject unsigned, cross-channel, or tampered checksum manifests. Release installers, tarballs, and Windows ZIPs also receive GitHub build-provenance attestations that can be checked with `gh attestation verify <artifact> --repo LiiLk/piloom`.
+
+For a trust bootstrap independent of the mutable R2 convenience URL, download `install.ps1` or `install.sh` from the versioned GitHub Release, verify its GitHub attestation, and only then execute it. The checksum signature protects an already-authenticated installer from a compromised download origin; it cannot make an installer fetched from that same compromised origin trustworthy.
 
 > [!WARNING]
 > PiLoom executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not a security sandbox**. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
@@ -76,13 +92,13 @@ The current CLI executable remains `prime-agent`; the repository and project ide
 Useful commands:
 
 ```bash
-prime-agent agents                   # Browse running, idle, and saved sessions
-prime-agent attach <agent>           # Reattach to a running session
-prime-agent --resume <path|id>       # Resume a saved session
-prime-agent status                   # Inspect background service state
-prime-agent doctor [--fix]            # Inspect or repair background services
-prime-agent update [--force]          # Update Prime Agent
-prime-agent shutdown [--force]        # Stop every agent, worker, and background service
+piloom agents                   # Browse running, idle, and saved sessions
+piloom attach <agent>           # Reattach to a running session
+piloom --resume <path|id>       # Resume a saved session
+piloom status                   # Inspect background service state
+piloom doctor [--fix]           # Inspect or repair background services
+piloom update [--force]         # Update PiLoom
+piloom shutdown [--force]       # Stop every agent, worker, and background service
 ```
 
 ## Built for Long-Running Work
@@ -92,7 +108,7 @@ PiLoom is designed for long-running work, especially for evaluations in research
 - **Continual Harness:** `/refine` can persist focused, reviewable lessons as supplemental prompts, memories, reusable skill descriptions, or subagent specifications, with recorded refinement history. It does not replace packaging and reviewing new executable skills.
 - **Direct agent-to-agent communication:** running agents and retained subagents can discover one another, exchange messages, and steer active work.
 - **Daemon-backed continuity:** active sessions, IPython state, schedules, and subagents keep running when the terminal detaches and can be reattached later.
-- **Heartbeats and schedules:** `/heartbeat`, `rlm_heartbeat`, and `prime-agent schedule` can re-enter a session periodically or at a specific time.
+- **Heartbeats and schedules:** `/heartbeat`, `rlm_heartbeat`, and `piloom schedule` can re-enter a session periodically or at a specific time.
 - **Persistent goals:** `/goal` keeps an objective and its progress active across turns until it is completed, paused, or cleared.
 - **Bounded autonomous mode:** `/autonomous` continues within configured turn, token, and time budgets and can run user-defined quality gates. A passed gate checks only what that gate verifies; reaching a limit does not imply task success.
 

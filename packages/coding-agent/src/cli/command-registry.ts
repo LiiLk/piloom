@@ -167,6 +167,8 @@ const TOP_LEVEL_OPTION_GROUPS: ReadonlyArray<{ heading: string; options: readonl
 			["-p, --print", "Print a response and exit"],
 			["--mode <text|json|rpc|acp|daemon>", "Select the output mode (default: text)"],
 			["--cwd <dir>", "Use a specific working directory"],
+			["-a, --approve", "Trust project-local inputs for this run"],
+			["-na, --no-approve", "Ignore project-local inputs for this run"],
 			["--offline", "Disable startup network operations"],
 			["--verbose", "Force verbose startup"],
 			["--daemon-socket <path>", "Use a specific daemon socket"],

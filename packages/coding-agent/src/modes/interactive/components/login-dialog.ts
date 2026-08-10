@@ -167,7 +167,11 @@ export class LoginDialogComponent extends Container implements Focusable {
 							url,
 						]
 					: ["xdg-open", url];
-		execFile(command, args, () => {});
+		if (process.platform === "win32") {
+			execFile(command, args, { windowsHide: true }, () => {});
+		} else {
+			execFile(command, args, () => {});
+		}
 
 		this.tui.requestRender();
 	}

@@ -1,7 +1,8 @@
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import fs, { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandRecoveryJournal } from "../src/modes/daemon/command-recovery-journal.js";
 
 describe("CommandRecoveryJournal", () => {
@@ -85,5 +86,60 @@ describe("CommandRecoveryJournal", () => {
 
 		const restored = new CommandRecoveryJournal(path);
 		expect(restored.begin("client-a", "command-a", "prompt")).toEqual({ status: "new" });
+	});
+
+	it("skips unsupported directory fsync on Windows but still fsyncs files", () => {
+		const path = createPath();
+		const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+		const fsync = vi.spyOn(fs, "fsyncSync");
+		syncBuiltinESMExports();
+		try {
+			const journal = new CommandRecoveryJournal(path);
+			journal.begin("client-a", "command-a", "prompt");
+			journal.recordResult("client-a", "command-a", {
+				id: "command-a",
+				type: "response",
+				command: "prompt",
+				success: true,
+			});
+
+			expect(() => journal.acknowledge("client-a", "command-a")).not.toThrow();
+			expect(fsync).toHaveBeenCalledTimes(4);
+		} finally {
+			fsync.mockRestore();
+			syncBuiltinESMExports();
+			platform.mockRestore();
+		}
+	});
+
+	it("does not suppress unrelated directory fsync errors", () => {
+		const path = createPath();
+		const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+		const originalFsyncSync = fs.fsyncSync;
+		const fsync = vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+			if (fs.fstatSync(descriptor).isDirectory()) {
+				const error = new Error("directory sync failed") as NodeJS.ErrnoException;
+				error.code = "EIO";
+				throw error;
+			}
+			originalFsyncSync(descriptor);
+		});
+		syncBuiltinESMExports();
+		try {
+			const journal = new CommandRecoveryJournal(path);
+			journal.begin("client-a", "command-a", "prompt");
+			journal.recordResult("client-a", "command-a", {
+				id: "command-a",
+				type: "response",
+				command: "prompt",
+				success: true,
+			});
+
+			expect(() => journal.acknowledge("client-a", "command-a")).toThrow("directory sync failed");
+		} finally {
+			fsync.mockRestore();
+			syncBuiltinESMExports();
+			platform.mockRestore();
+		}
 	});
 });

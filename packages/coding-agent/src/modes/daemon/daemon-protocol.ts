@@ -49,7 +49,7 @@ import type { SessionSummary } from "./daemon-session-list.js";
  */
 
 export const DAEMON_PROTOCOL_NAME = "prime-agent.daemon";
-export const DAEMON_PROTOCOL_VERSION = 7;
+export const DAEMON_PROTOCOL_VERSION = 9;
 export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 9 publishes persisted RLM spawn depth on passive session rows.
 // Revision 10 publishes persisted RLM spawn depth on all session catalog rows.
@@ -57,8 +57,11 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 12 publishes idle-residency metadata on session summary rows.
 // Revision 13 narrows agent-origin reach and roster wire shapes to the nuclear family.
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
-export const DAEMON_SCHEMA_REVISION = 14;
-export const DAEMON_SCHEMA_ID = "protocol-7-schema-14-816309b1cd50";
+// Revision 15 adds authenticated public Windows named-pipe startup.
+// Revision 16 replaces bearer-token authentication with mutual HMAC proof.
+// Revision 17 binds a server challenge and immutable client identity to Windows transport authentication.
+export const DAEMON_SCHEMA_REVISION = 17;
+export const DAEMON_SCHEMA_ID = "protocol-9-schema-17-54e2022f6f21";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -96,7 +99,8 @@ export type DaemonServerCapability =
 	// identity). Clients must check before sending.
 	| "transient_bash"
 	| "session_input_admission"
-	| "prompt_admission_cancellation";
+	| "prompt_admission_cancellation"
+	| "windows_transport_auth";
 
 export type DaemonReplayStatus = "complete" | "partial" | "unavailable";
 
@@ -135,6 +139,14 @@ export const DAEMON_DEFAULT_SERVER_CAPABILITIES: readonly DaemonServerCapability
 	"session_input_admission",
 	"prompt_admission_cancellation",
 ];
+
+export function getDaemonSupervisorServerCapabilities(
+	platform: NodeJS.Platform = process.platform,
+): readonly DaemonServerCapability[] {
+	return platform === "win32"
+		? [...DAEMON_DEFAULT_SERVER_CAPABILITIES, "windows_transport_auth"]
+		: DAEMON_DEFAULT_SERVER_CAPABILITIES;
+}
 
 export interface DaemonRuntimeIdentity {
 	buildId: string;
@@ -342,6 +354,7 @@ export type DaemonSavedSessionListCommand =
 	  };
 
 export type DaemonCommand =
+	| { id?: string; type: "daemon_auth"; challenge: string; clientId: DaemonClientId; proof: string }
 	| {
 			id?: string;
 			type: "list";
@@ -635,8 +648,14 @@ const DELETE_RLM_SUBAGENT_COMMAND = {
 } as const;
 const FLAT_SESSION_TREE_COMMAND = { minProtocol: 7 } as const;
 const TELEMETRY_POLICY_COMMAND = { minProtocol: 7, minSchemaRevision: 14 } as const;
+const WINDOWS_TRANSPORT_AUTH_COMMAND = {
+	minProtocol: 9,
+	minSchemaRevision: 17,
+	capability: "windows_transport_auth",
+} as const;
 
 export const DAEMON_COMMAND_COMPATIBILITY = {
+	daemon_auth: WINDOWS_TRANSPORT_AUTH_COMMAND,
 	ack_result: LEGACY_DAEMON_COMMAND,
 	list: LEGACY_DAEMON_COMMAND,
 	list_saved_sessions: LEGACY_DAEMON_COMMAND,
@@ -854,6 +873,8 @@ export type DaemonOutbound =
 			supervisorSocketPath?: string;
 			clientId: DaemonClientId;
 			serverCapabilities: readonly DaemonServerCapability[];
+			/** Single-use server nonce required by Windows transport authentication. */
+			authenticationChallenge?: string;
 	  }
 	| { type: "daemon_closing"; reason: DaemonClosingReason }
 	| { type: "heartbeats_changed" }

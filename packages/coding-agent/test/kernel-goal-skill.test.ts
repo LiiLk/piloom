@@ -28,7 +28,7 @@ describe("goal skill over the kernel host bridge", { tags: ["kernel-heavy"] }, (
 	afterEach(async () => {
 		await provisioner?.dispose();
 		provisioner = undefined;
-		rmSync(tempDir, { recursive: true, force: true });
+		rmSync(tempDir, { recursive: true, force: true, maxRetries: 100, retryDelay: 100 });
 	});
 
 	it("round-trips goal.create and goal.complete through a live kernel", async () => {

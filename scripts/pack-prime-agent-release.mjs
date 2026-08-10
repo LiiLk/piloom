@@ -22,7 +22,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutputDir = join(root, "packages", "coding-agent", "release");
 const defaultBaseUrl = process.env.PRIME_AGENT_DOWNLOAD_BASE_URL;
 const publicPackageName = process.env.PRIME_AGENT_PACKAGE_NAME || "prime-agent";
-const publicCommandName = process.env.PRIME_AGENT_CMD || "prime-agent";
+const publicCommandName = process.env.PRIME_AGENT_CMD || "piloom";
 const releaseChannels = new Set(["stable", "beta"]);
 
 const releasePackages = [
@@ -195,7 +195,7 @@ function createReleasePackageJson(sourcePackage, packageName, releaseVersion, in
 		};
 		packageJson.piConfig = {
 			...(packageJson.piConfig || {}),
-			name: publicCommandName,
+			commandName: publicCommandName,
 			configDir: ".prime/agent",
 		};
 	}
@@ -212,17 +212,40 @@ function copyPackageContents(sourceDir, targetDir, packageJson) {
 	}
 }
 
+const WINDOWS_SHELL_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeWindowsShellValue(value, command) {
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error("Windows command arguments cannot contain NUL or newline characters");
+	}
+	if (command) {
+		return value.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+	}
+	const escaped = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
+	return `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+}
+
 function run(command, args, cwd) {
-	const result = spawnSync(command, args, {
+	const useWindowsShell = process.platform === "win32" && command === "npm";
+	const shellCommand = useWindowsShell
+		? [escapeWindowsShellValue("npm", true), ...args.map((argument) => escapeWindowsShellValue(argument, false))].join(
+				" ",
+			)
+		: undefined;
+	const invocationCommand = useWindowsShell ? (process.env.ComSpec ?? "cmd.exe") : command;
+	const invocationArgs = shellCommand ? ["/d", "/s", "/c", `"${shellCommand}"`] : args;
+	const result = spawnSync(invocationCommand, invocationArgs, {
 		cwd,
 		stdio: "pipe",
 		encoding: "utf8",
+		windowsVerbatimArguments: useWindowsShell,
+		windowsHide: useWindowsShell,
 	});
 
 	if (result.status !== 0) {
 		if (result.stdout) process.stdout.write(result.stdout);
 		if (result.stderr) process.stderr.write(result.stderr);
-		throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status}`);
+		throw new Error(`${invocationCommand} ${args.join(" ")} failed with exit code ${result.status}`);
 	}
 
 	if (result.stderr) process.stderr.write(result.stderr);

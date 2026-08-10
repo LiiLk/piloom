@@ -7,10 +7,10 @@ Prime Agent saves conversations as sessions so you can continue work, branch fro
 Sessions auto-save to `~/.prime/agent/sessions/`. Each session is a JSONL file with a tree structure.
 
 ```bash
-prime-agent --continue          # Continue the most recent session
-prime-agent --resume [path|id]  # Browse past sessions or resume one directly
-prime-agent --no-session        # Ephemeral mode; do not save
-prime-agent --fork <path|id>    # Fork a session file or partial session ID into a new session
+piloom --continue          # Continue the most recent session
+piloom --resume [path|id]  # Browse past sessions or resume one directly
+piloom --no-session        # Ephemeral mode; do not save
+piloom --fork <path|id>    # Fork a session file or partial session ID into a new session
 ```
 
 Use `/session` in interactive mode to see the current session file, session ID, and message count. Use `/usage` for token, cost, and context usage.
@@ -35,9 +35,9 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 
 ## Resuming and Deleting Sessions
 
-`/resume` opens an interactive session picker for the current project. `prime-agent --resume` opens the same picker at startup, and `prime-agent --resume <path|id>` resumes a specific session.
+`/resume` opens an interactive session picker for the current project. `piloom --resume` opens the same picker at startup, and `piloom --resume <path|id>` resumes a specific session.
 
-An invalid ID exits with the closest unambiguous session ID when one is available. To open the picker and send an initial prompt after selecting a session, separate the prompt with `--`: `prime-agent --resume -- "continue this work"`.
+An invalid ID exits with the closest unambiguous session ID when one is available. To open the picker and send an initial prompt after selecting a session, separate the prompt with `--`: `piloom --resume -- "continue this work"`.
 
 In the picker you can:
 
@@ -58,7 +58,7 @@ Use `/name <name>` to set a human-readable session name:
 /name Refactor auth module
 ```
 
-Named sessions are easier to find in `/resume` and `prime-agent --resume`.
+Named sessions are easier to find in `/resume` and `piloom --resume`.
 
 ## Branching with `/tree`
 

@@ -1,7 +1,7 @@
 # JSON Event Stream Mode
 
 ```bash
-prime-agent --mode json "Your prompt"
+piloom --mode json "Your prompt"
 ```
 
 Outputs all session events as JSON lines to stdout. Useful for integrating Prime Agent into other tools or custom UIs.
@@ -78,5 +78,5 @@ Followed by events as they occur:
 ## Example
 
 ```bash
-prime-agent --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
+piloom --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
 ```

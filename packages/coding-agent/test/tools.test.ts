@@ -201,7 +201,9 @@ describe("Coding Agent Tools", () => {
 					path: testFile,
 					edits: [{ oldText: "hello", newText: "world" }],
 				}),
-			).rejects.toThrow(`Could not edit file: ${testFile}. Error code: EACCES.`);
+			).rejects.toThrow(
+				`Could not edit file: ${testFile}. Error code: ${process.platform === "win32" ? "EPERM" : "EACCES"}.`,
+			);
 		});
 
 		it("should include the original error message for unknown edit access errors", async () => {
@@ -237,7 +239,11 @@ describe("Coding Agent Tools", () => {
 
 			const result = await computeEditsDiff(unreadableFile, [{ oldText: "hello", newText: "world" }], testDir);
 
-			expect(result).toEqual({ error: `Could not edit file: ${unreadableFile}. Error code: EACCES.` });
+			if (process.platform === "win32") {
+				expect(result).toMatchObject({ diff: expect.any(String), firstChangedLine: 1 });
+			} else {
+				expect(result).toEqual({ error: `Could not edit file: ${unreadableFile}. Error code: EACCES.` });
+			}
 		});
 	});
 
@@ -252,6 +258,20 @@ describe("Coding Agent Tools", () => {
 		it("should handle command errors", async () => {
 			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
 				/(Command failed|code 1)/,
+			);
+		});
+
+		it("should preserve command-not-found output and status", async () => {
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("bash: missing-command: command not found\n", "utf-8"));
+					return { exitCode: 127 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+
+			await expect(bash.execute("test-call-command-not-found", { command: "missing-command" })).rejects.toThrow(
+				/command not found[\s\S]*Command exited with code 127/,
 			);
 		});
 

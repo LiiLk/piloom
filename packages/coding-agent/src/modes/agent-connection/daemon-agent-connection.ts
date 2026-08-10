@@ -103,7 +103,9 @@ const MAX_IGNORED_SNAPSHOT_IDS = 128;
 const UPDATE_RECONNECT_TIMEOUT_MS = 120000;
 const UPDATE_RECONNECT_RETRY_MS = 100;
 const MAX_COMPLETED_SNAPSHOTS = 128;
-const OWNED_SESSION_DISPOSE_RECONNECT_WAIT_MS = 10_000;
+const OWNED_SESSION_DISPOSE_RECONNECT_WAIT_MS = 30_000;
+const OWNED_SESSION_DISPOSE_TRANSPORT_WAIT_MS = 1_000;
+const OWNED_SESSION_DISPOSE_REQUEST_TIMEOUT_MS = 5_000;
 const updateTransportReconnects = new WeakMap<DaemonClient, Promise<void>>();
 
 function delay(ms: number): Promise<void> {
@@ -1293,27 +1295,83 @@ export class DaemonAgentConnection implements AgentConnection {
 			return;
 		}
 		this.disposing = true;
-		if (this.options.ownedSession && !this.client.isConnected && this.reconnectPromise) {
-			await Promise.race([this.reconnectPromise, delay(OWNED_SESSION_DISPOSE_RECONNECT_WAIT_MS)]).catch(
-				() => undefined,
-			);
+		if (!this.options.ownedSession) {
+			this.disposed = true;
+			this.updateRestartPending = false;
+			await Promise.allSettled([...this.activeSideQuestionIds].map((id) => this.abortSideQuestion(id)));
+			this.unsubscribeDaemonMessages();
+			this.unsubscribeDaemonClose();
+			try {
+				await this.requestOk(
+					{ type: "detach", activeSessionId: this.activeSessionId },
+					OWNED_SESSION_DISPOSE_REQUEST_TIMEOUT_MS,
+				).catch(() => undefined);
+			} finally {
+				if (this.options.closeClientOnDispose) {
+					this.client.close();
+				}
+				this.rejectSnapshotAssemblies(new Error("Daemon connection disposed during snapshot transfer"));
+			}
+			return;
 		}
-		this.disposed = true;
+		if (this.options.ownedSession && this.options.recoverDaemon) {
+			await this.waitForTransportClose(OWNED_SESSION_DISPOSE_TRANSPORT_WAIT_MS);
+		}
+		if (this.options.ownedSession && this.options.recoverDaemon && !this.client.isConnected) {
+			const reconnectDeadline = Date.now() + OWNED_SESSION_DISPOSE_RECONNECT_WAIT_MS;
+			while (!this.client.isConnected && Date.now() < reconnectDeadline) {
+				const reconnect =
+					this.reconnectPromise ??
+					this.reconnect(new Error("owned session disposal is waiting for daemon recovery"));
+				const remainingMs = reconnectDeadline - Date.now();
+				await Promise.race([reconnect, delay(remainingMs)]).catch(() => undefined);
+			}
+		}
 		this.updateRestartPending = false;
 		await Promise.allSettled([...this.activeSideQuestionIds].map((id) => this.abortSideQuestion(id)));
-		this.unsubscribeDaemonMessages();
-		this.unsubscribeDaemonClose();
-		if (this.options.ownedSession) {
-			await this.requestOk({ type: "complete_owned_session", activeSessionId: this.activeSessionId }).catch(
-				() => undefined,
-			);
-		} else {
-			await this.requestOk({ type: "detach", activeSessionId: this.activeSessionId }).catch(() => undefined);
+		try {
+			if (this.client.isConnected) {
+				await this.requestOk(
+					{ type: "complete_owned_session", activeSessionId: this.activeSessionId },
+					OWNED_SESSION_DISPOSE_REQUEST_TIMEOUT_MS,
+				).catch(() => undefined);
+			}
+		} finally {
+			this.disposed = true;
+			this.unsubscribeDaemonMessages();
+			this.unsubscribeDaemonClose();
+			if (this.options.closeClientOnDispose) {
+				this.client.close();
+			}
+			this.rejectSnapshotAssemblies(new Error("Daemon connection disposed during snapshot transfer"));
 		}
-		if (this.options.closeClientOnDispose) {
-			this.client.close();
+	}
+
+	private async waitForTransportClose(timeoutMs: number): Promise<void> {
+		if (!this.client.isConnected) {
+			return;
 		}
-		this.rejectSnapshotAssemblies(new Error("Daemon connection disposed during snapshot transfer"));
+		await new Promise<void>((resolve) => {
+			let settled = false;
+			let timeout: ReturnType<typeof setTimeout> | undefined;
+			let unsubscribe: (() => void) | undefined;
+			const finish = () => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				if (timeout) {
+					clearTimeout(timeout);
+				}
+				unsubscribe?.();
+				resolve();
+			};
+			unsubscribe = this.client.onClose(finish);
+			timeout = setTimeout(finish, timeoutMs);
+			if (!this.client.isConnected) {
+				finish();
+			}
+		});
 	}
 
 	async promoteToResident(): Promise<void> {
@@ -1388,8 +1446,8 @@ export class DaemonAgentConnection implements AgentConnection {
 		return this.reconnectPromise;
 	}
 
-	private async requestOk(command: DaemonCommandBody): Promise<void> {
-		await this.requestData<unknown>(command);
+	private async requestOk(command: DaemonCommandBody, timeoutMs?: number): Promise<void> {
+		await this.requestData<unknown>(command, timeoutMs);
 	}
 
 	private async requestData<T>(

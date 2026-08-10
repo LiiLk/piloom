@@ -59,7 +59,7 @@ if [[ "$NO_ENV" == "true" ]]; then
   unset AZURE_OPENAI_API_KEY
   unset AZURE_OPENAI_BASE_URL
   unset AZURE_OPENAI_RESOURCE_NAME
-  echo "Running Prime Agent without API keys..."
+  echo "Running PiLoom without API keys..."
 fi
 
 # --dist runs the bundled build (what users get; ~3x faster startup than tsx).
@@ -78,4 +78,4 @@ if [[ ! -x "$TSX_BIN" ]]; then
   exit 1
 fi
 
-"$TSX_BIN" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}
+"$TSX_BIN" --tsconfig "$SCRIPT_DIR/tsconfig.json" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}

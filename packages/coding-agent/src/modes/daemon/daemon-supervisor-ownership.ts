@@ -12,6 +12,11 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { getProcessStartId } from "../../core/session-lease.js";
+import {
+	createWindowsAuthenticationToken,
+	protectWindowsData,
+	unprotectWindowsData,
+} from "../../utils/windows-process-security.js";
 import { defaultDaemonSocketDir } from "./daemon-socket.js";
 
 const DAEMON_SUPERVISOR_REGISTRY_DIR_ENV = "PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
@@ -34,6 +39,12 @@ interface ProcessIdentity {
 	processStartId?: string;
 }
 
+export interface DaemonSupervisorOwnerSnapshot {
+	readonly pid: number;
+	readonly processStartId?: string;
+	readonly socketPath: string;
+}
+
 interface DaemonSupervisorOwnerRecord extends ProcessIdentity {
 	version: 1;
 	role: "supervisor";
@@ -43,6 +54,7 @@ interface DaemonSupervisorOwnerRecord extends ProcessIdentity {
 	descriptorDir: string;
 	agentDir: string;
 	appVersion: string;
+	protectedAuthenticationToken?: string;
 	phase: DaemonSupervisorOwnerPhase;
 	createdAt: string;
 	updatedAt: string;
@@ -125,6 +137,7 @@ class DaemonSupervisorOwnership {
 		readonly record: DaemonSupervisorOwnerRecord,
 		private readonly registryDir: string,
 		private readonly ownerDirectory: string,
+		readonly authenticationToken?: string,
 	) {}
 
 	async assertCurrent(): Promise<void> {
@@ -250,6 +263,83 @@ function defaultDaemonSupervisorRegistryDir(environment: NodeJS.ProcessEnv = pro
 	return environment[DAEMON_SUPERVISOR_REGISTRY_DIR_ENV] ?? resolve(defaultDaemonSocketDir(), "supervisor-owners");
 }
 
+export function readDaemonSupervisorOwnerSnapshot(
+	registryDir: string = defaultDaemonSupervisorRegistryDir(),
+): readonly DaemonSupervisorOwnerSnapshot[] {
+	let directories: string[];
+	try {
+		directories = listOwnerDirectories(registryDir);
+	} catch {
+		return [];
+	}
+
+	const snapshot: DaemonSupervisorOwnerSnapshot[] = [];
+	for (const directory of directories) {
+		const owner = readOwnerRecord(directory);
+		if (!owner) {
+			continue;
+		}
+		try {
+			if (ownerDirectoryPath(registryDir, owner.generation) !== directory) {
+				continue;
+			}
+		} catch {
+			continue;
+		}
+		snapshot.push({
+			pid: owner.pid,
+			...(owner.processStartId !== undefined ? { processStartId: owner.processStartId } : {}),
+			socketPath: owner.socketPath,
+		});
+	}
+	return snapshot;
+}
+
+export function readDaemonSupervisorAuthenticationToken(
+	socketPath: string,
+	generation: string,
+	registryDir: string = defaultDaemonSupervisorRegistryDir(),
+): string | undefined {
+	if (process.platform !== "win32") {
+		return undefined;
+	}
+	try {
+		const owner = readOwnerRecord(ownerDirectoryPath(registryDir, generation));
+		if (
+			!owner?.protectedAuthenticationToken ||
+			owner.socketPath !== normalizeSocketPath(socketPath) ||
+			!isProcessIdentityAlive(owner)
+		) {
+			return undefined;
+		}
+		return unprotectDaemonSupervisorAuthenticationToken(
+			owner.protectedAuthenticationToken,
+			owner.socketPath,
+			owner.generation,
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+export function unprotectDaemonSupervisorAuthenticationToken(
+	protectedToken: string,
+	socketPath: string,
+	generation: string,
+): string | undefined {
+	if (process.platform !== "win32") {
+		return undefined;
+	}
+	try {
+		return unprotectWindowsData(
+			protectedToken,
+			createAuthenticationEntropy(normalizeSocketPath(socketPath), generation),
+		).toString("utf8");
+	} catch {
+		return undefined;
+	}
+}
+
 async function withDaemonSupervisorRegistryGuard<T>(registryDir: string, action: () => T | Promise<T>): Promise<T> {
 	mkdirSync(registryDir, { recursive: true, mode: 0o700 });
 	const release = await lockfile.lock(registryDir, {
@@ -308,6 +398,8 @@ export async function acquireDaemonSupervisorOwnership(
 	const token = randomUUID();
 	const processStartId = getProcessStartId(process.pid);
 	const now = new Date().toISOString();
+	const socketPath = normalizeSocketPath(options.socketPath);
+	const authenticationToken = process.platform === "win32" ? createWindowsAuthenticationToken() : undefined;
 	const record: DaemonSupervisorOwnerRecord = {
 		version: OWNER_VERSION,
 		role: "supervisor",
@@ -315,10 +407,18 @@ export async function acquireDaemonSupervisorOwnership(
 		generation: options.generation,
 		pid: process.pid,
 		...(processStartId ? { processStartId } : {}),
-		socketPath: normalizeSocketPath(options.socketPath),
+		socketPath,
 		descriptorDir: canonicalizeFilesystemPath(options.descriptorDir),
 		agentDir: canonicalizeFilesystemPath(options.agentDir),
 		appVersion: options.appVersion,
+		...(authenticationToken
+			? {
+					protectedAuthenticationToken: protectWindowsData(
+						Buffer.from(authenticationToken, "utf8"),
+						createAuthenticationEntropy(socketPath, options.generation),
+					),
+				}
+			: {}),
 		phase: "starting",
 		createdAt: now,
 		updatedAt: now,
@@ -359,7 +459,7 @@ export async function acquireDaemonSupervisorOwnership(
 			rmSync(directory, { recursive: true, force: true });
 		}
 	}
-	return new DaemonSupervisorOwnership(record, registryDir, ownerDirectory);
+	return new DaemonSupervisorOwnership(record, registryDir, ownerDirectory, authenticationToken);
 }
 
 export async function assertDaemonSupervisorOwnerCurrent(
@@ -552,6 +652,10 @@ function normalizeSocketPath(socketPath: string): string {
 	return resolve(socketPath);
 }
 
+function createAuthenticationEntropy(socketPath: string, generation: string): Buffer {
+	return Buffer.from(`piloom-daemon-auth\0${socketPath}\0${generation}`, "utf8");
+}
+
 function canonicalizeFilesystemPath(path: string): string {
 	let existingAncestor = resolve(path);
 	const missingSuffix: string[] = [];
@@ -585,7 +689,8 @@ function sameOwnerRecord(left: DaemonSupervisorOwnerRecord, right: DaemonSupervi
 		left.generation === right.generation &&
 		left.pid === right.pid &&
 		left.processStartId === right.processStartId &&
-		left.socketPath === right.socketPath
+		left.socketPath === right.socketPath &&
+		left.protectedAuthenticationToken === right.protectedAuthenticationToken
 	);
 }
 
@@ -662,6 +767,7 @@ function isDaemonSupervisorOwnerRecord(value: unknown): value is DaemonSuperviso
 		typeof record.descriptorDir === "string" &&
 		typeof record.agentDir === "string" &&
 		typeof record.appVersion === "string" &&
+		(record.protectedAuthenticationToken === undefined || typeof record.protectedAuthenticationToken === "string") &&
 		(record.phase === "starting" || record.phase === "owner" || record.phase === "stopping") &&
 		typeof record.createdAt === "string" &&
 		typeof record.updatedAt === "string"

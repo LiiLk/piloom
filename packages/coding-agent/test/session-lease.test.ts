@@ -11,6 +11,7 @@ import {
 	SESSION_LEASE_OWNER_ID_ENV,
 	SESSION_LEASES_ENABLED_ENV,
 	SessionAlreadyActiveError,
+	sessionLeaseKeyPath,
 } from "../src/core/session-lease.js";
 
 const tempDirs: string[] = [];
@@ -96,7 +97,7 @@ describe("session leases", () => {
 	it("reclaims a lease whose owner process is gone", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(resolve(agentDir, "stale.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const key = createHash("sha256").update(sessionLeaseKeyPath(sessionPath)).digest("hex");
 		const lockDirectory = join(agentDir, "session-leases", `${key}.lock`);
 		mkdirSync(lockDirectory, { recursive: true });
 		writeFileSync(
@@ -119,7 +120,8 @@ describe("session leases", () => {
 	it("reports guard contention as a coordination failure", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(join(agentDir, "session.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const leaseKeyPath = sessionLeaseKeyPath(sessionPath);
+		const key = createHash("sha256").update(leaseKeyPath).digest("hex");
 		const leaseRoot = join(agentDir, "session-leases");
 		const lockDirectory = join(leaseRoot, `${key}.lock`);
 		mkdirSync(leaseRoot, { recursive: true });
@@ -146,10 +148,15 @@ describe("session leases", () => {
 
 	it("treats symlink aliases as the same persisted session", () => {
 		const agentDir = createTempDir();
-		const sessionPath = join(agentDir, "session.jsonl");
-		const aliasPath = join(agentDir, "session-alias.jsonl");
-		writeFileSync(sessionPath, "");
-		symlinkSync(sessionPath, aliasPath);
+		const sessionPath = join(agentDir, process.platform === "win32" ? "session" : "session.jsonl");
+		const aliasPath = join(agentDir, process.platform === "win32" ? "session-alias" : "session-alias.jsonl");
+		if (process.platform === "win32") {
+			mkdirSync(sessionPath);
+			symlinkSync(sessionPath, aliasPath, "junction");
+		} else {
+			writeFileSync(sessionPath, "");
+			symlinkSync(sessionPath, aliasPath);
+		}
 		const first = acquireSessionLease(sessionPath, agentDir, enabledEnvironment("resident-a"));
 
 		expect(() => acquireSessionLease(aliasPath, agentDir, enabledEnvironment("owned-b"))).toThrow(
@@ -158,10 +165,26 @@ describe("session leases", () => {
 		first?.release();
 	});
 
+	it.skipIf(process.platform !== "win32")("treats Windows path casing as the same persisted session", () => {
+		const agentDir = createTempDir();
+		const first = acquireSessionLease(join(agentDir, "Session.jsonl"), agentDir, enabledEnvironment("resident-a"));
+
+		expect(() =>
+			acquireSessionLease(join(agentDir, "session.jsonl"), agentDir, enabledEnvironment("owned-b")),
+		).toThrow(SessionAlreadyActiveError);
+		first?.release();
+	});
+
+	it("preserves distinct names in a case-sensitive Windows directory", () => {
+		expect(sessionLeaseKeyPath("C:\\sessions\\Session.jsonl", "win32", true)).not.toBe(
+			sessionLeaseKeyPath("C:\\sessions\\session.jsonl", "win32", true),
+		);
+	});
+
 	it("reclaims a lease after its pid has been reused", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(resolve(agentDir, "reused-pid.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const key = createHash("sha256").update(sessionLeaseKeyPath(sessionPath)).digest("hex");
 		const lockDirectory = join(agentDir, "session-leases", `${key}.lock`);
 		mkdirSync(lockDirectory, { recursive: true });
 		writeFileSync(

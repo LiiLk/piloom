@@ -1063,7 +1063,7 @@ See [RPC documentation](rpc.md) for the JSON protocol.
 For subprocess-based integration without building with the SDK, use the CLI directly:
 
 ```bash
-prime-agent --mode rpc --no-session
+piloom --mode rpc --no-session
 ```
 
 See [RPC documentation](rpc.md) for the JSON protocol.

@@ -107,6 +107,7 @@ export class RpcClient {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],
+			windowsHide: process.platform === "win32",
 		});
 
 		// Collect stderr for debugging

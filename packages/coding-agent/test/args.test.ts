@@ -2,6 +2,15 @@ import { describe, expect, test } from "vitest";
 import { INTERNAL_RUNTIME_COMMAND_MARKER, parseArgs } from "../src/cli/args.js";
 
 describe("parseArgs", () => {
+	describe("project trust overrides", () => {
+		test("supports approve and no-approve spellings", () => {
+			expect(parseArgs(["--approve"]).projectTrustOverride).toBe(true);
+			expect(parseArgs(["-a"]).projectTrustOverride).toBe(true);
+			expect(parseArgs(["--no-approve"]).projectTrustOverride).toBe(false);
+			expect(parseArgs(["-na"]).projectTrustOverride).toBe(false);
+		});
+	});
+
 	describe("--version flag", () => {
 		test("parses --version flag", () => {
 			const result = parseArgs(["--version"]);
@@ -202,7 +211,7 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual([]);
 			expect(result.diagnostics).toContainEqual({
 				type: "error",
-				message: '--export was removed. Use "prime-agent session export <file> [output]".',
+				message: '--export was removed. Use "piloom session export <file> [output]".',
 			});
 		});
 
@@ -217,7 +226,7 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual([]);
 			expect(result.diagnostics).toContainEqual({
 				type: "error",
-				message: '--list-models was removed. Use "prime-agent model list [search]".',
+				message: '--list-models was removed. Use "piloom model list [search]".',
 			});
 		});
 

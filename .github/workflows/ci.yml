@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -42,6 +42,29 @@ jobs:
 
       - name: Check
         run: npm run check
+
+  build-check-windows:
+    name: Build and check (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm.cmd ci
+
+      - name: Build
+        run: npm.cmd run build
+
+      - name: Check
+        run: npm.cmd run check
 
   test:
     name: Test (${{ matrix.name }})
@@ -85,10 +108,10 @@ jobs:
             install_uv: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -115,16 +138,63 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ${{ matrix.command }}
 
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: npm.cmd ci
+
+      - name: Build
+        run: npm.cmd run build
+
+      - name: Install uv
+        run: |
+          python -m pip install uv
+          uv --version
+
+      - name: Test kernel and lifecycle paths
+        working-directory: packages/coding-agent
+        run: |
+          npm.cmd run test:kernel
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/kernel-startup.test.ts test/owned-session-worker-process.test.ts test/package-self-update-daemon.test.ts
+      - name: Test Windows portability paths
+        working-directory: packages/coding-agent
+        run: |
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-socket.test.ts test/daemon-launch.test.ts test/daemon-command.test.ts test/daemon-windows-auth.test.ts test/windows-job-object.test.ts test/piloom-command.test.ts test/exec.test.ts test/daemon-ps.test.ts test/child-process.test.ts test/shell.test.ts test/session-lease.test.ts test/tools-manager.test.ts test/auth-storage.test.ts test/telemetry.test.ts test/refinement.test.ts test/session-manager-flush.test.ts test/tools.test.ts
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run --no-file-parallelism test/daemon-supervisor-process.test.ts
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-supervisor-process.test.ts --testNamePattern "isolates a root, streams a chunked snapshot, and adopts the same worker after restart" --tagsFilter process-stress
+          npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/package-manager.test.ts --testNamePattern "quotes Windows-shell"
+
   build-check-test:
     name: build-check-test
     if: always()
-    needs: [build-check, test]
+    needs: [build-check, build-check-windows, test, test-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Verify CI results
         env:
           BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
+          BUILD_CHECK_WINDOWS_RESULT: ${{ needs.build-check-windows.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          TEST_WINDOWS_RESULT: ${{ needs.test-windows.result }}
         run: |
           test "$BUILD_CHECK_RESULT" = success
+          test "$BUILD_CHECK_WINDOWS_RESULT" = success
           test "$TEST_RESULT" = success
+          test "$TEST_WINDOWS_RESULT" = success

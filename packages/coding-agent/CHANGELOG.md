@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- Added project trust prompts and `--approve`/`--no-approve` controls that gate project-local settings, resources, instructions, and extensions.
+- Changed first-run TUI branding to PiLoom and replaced the automatic Prime Intellect login prompt with generic model selection.
+- Changed the public CLI command and standalone executable to `piloom`, with Windows installer PATH verification.
+- Added Windows-first installation and release verification through a PowerShell installer, native CI coverage, and daemon/lifecycle checks.
+- Fixed Windows kernel bootstrap to use `Scripts/python.exe`, install `uv` through PowerShell, and skip unsupported directory fsync during daemon journal compaction.
+- Fixed Windows daemon replacement locks, Bun/npm command shims, tilde-based paths, and process-tree cleanup for cancelled commands and orphaned workers.
+- Fixed Windows owned-session disposal during supervisor replacement and suppressed consoles for noninteractive process probes and supervisor test children.
+- Fixed remaining noninteractive Windows fallbacks opening consoles during config resolution, clipboard use, OAuth browser launch, and GitHub sharing.
+- Fixed Windows Git Bash child environments so shell utilities remain available to bash tools and command-backed credentials.
+- Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by exact version and native ABI self-tests; release jobs now publish only assets built for the requested version.
+- Added fail-closed, mutually authenticated per-user Windows daemon pipes, socket-bound client identities, and DPAPI-protected persisted worker credentials.
+- Added Job Object cleanup for frontend-owned worker process trees, explicit daemon replacement breakaway, and kernel teardown that waits for observed process exit before removing state.
+- Fixed daemon catalog shutdown waiting for its subprocess to exit, preventing Windows ACP cleanup from leaving locked project directories.
+- Hardened the Windows installer to reject HTTP and redirected downloads instead of trusting hashes fetched through a downgraded transport.
+- Added channel- and version-bound signed release manifests plus GitHub build-provenance attestations, with protected release approval and installers rejecting unsigned, substituted, or tampered releases.
+- Fixed Windows command shims preserving arguments through `cmd.exe` without allowing metacharacter injection.
+- Fixed custom uv install directories and session leases in case-sensitive Windows directories.
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
 - Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prime-agent` ([#844](https://github.com/PrimeIntellect-ai/prime-agent/issues/844))

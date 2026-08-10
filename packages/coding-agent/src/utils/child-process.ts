@@ -1,18 +1,68 @@
 import type { ChildProcess } from "node:child_process";
 import { constants } from "node:os";
-import { basename } from "node:path";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
-const WINDOWS_SHELL_COMMANDS = new Set(["npm", "npx", "pnpm", "yarn", "yarnpkg", "corepack"]);
+const WINDOWS_SHELL_COMMANDS = new Set(["bun", "npm", "npx", "pnpm", "yarn", "yarnpkg", "corepack"]);
+const WINDOWS_SHELL_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+const WINDOWS_COMMAND_SHIM_PATTERN = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i;
+
+export interface PreparedWindowsInvocation {
+	command: string;
+	args: string[];
+	windowsVerbatimArguments?: boolean;
+}
 
 export function shouldUseWindowsShell(command: string): boolean {
 	if (process.platform !== "win32") return false;
-	const commandName = basename(command).toLowerCase();
+	const commandName = command.replace(/^.*[\\/]/, "").toLowerCase();
 	return commandName.endsWith(".cmd") || commandName.endsWith(".bat") || WINDOWS_SHELL_COMMANDS.has(commandName);
 }
 
+function rejectWindowsCommandControlCharacters(value: string): void {
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error("Windows command arguments cannot contain NUL or newline characters");
+	}
+}
+
+function escapeWindowsCommand(value: string): string {
+	rejectWindowsCommandControlCharacters(value);
+	return value.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+}
+
+function escapeWindowsArgument(value: string, doubleEscapeMetaCharacters: boolean): string {
+	rejectWindowsCommandControlCharacters(value);
+	let escaped = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
+	escaped = `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+	return doubleEscapeMetaCharacters ? escaped.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1") : escaped;
+}
+
+export function prepareWindowsShellInvocation(command: string, args: string[]): PreparedWindowsInvocation {
+	if (!shouldUseWindowsShell(command)) {
+		return { command, args };
+	}
+	const doubleEscapeMetaCharacters = WINDOWS_COMMAND_SHIM_PATTERN.test(command);
+	const commandLine = [
+		escapeWindowsCommand(command),
+		...args.map((argument) => escapeWindowsArgument(argument, doubleEscapeMetaCharacters)),
+	].join(" ");
+	return {
+		command: process.env.ComSpec ?? "cmd.exe",
+		args: ["/d", "/s", "/c", `"${commandLine}"`],
+		windowsVerbatimArguments: true,
+	};
+}
+
 export function signalProcessGroupOrProcess(pid: number, signal: NodeJS.Signals): void {
+	if (process.platform === "win32") {
+		try {
+			process.kill(pid, signal);
+		} catch {
+			// The process may already be fully reaped.
+		}
+		return;
+	}
+
 	try {
 		process.kill(-pid, signal);
 		return;

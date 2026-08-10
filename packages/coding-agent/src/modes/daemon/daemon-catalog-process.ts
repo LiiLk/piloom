@@ -385,9 +385,19 @@ export class DaemonCatalogClient {
 		if (!child) {
 			return;
 		}
+		const exited =
+			child.exitCode !== null || child.signalCode !== null
+				? Promise.resolve()
+				: new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
 		await this.request({ type: "request", id: randomUUID(), command: "shutdown" }).catch(() => undefined);
-		child.disconnect();
-		this.child = undefined;
+		if (child.connected) child.disconnect();
+		let exitedInTime = await waitForCatalogExit(exited, 5000);
+		if (!exitedInTime) {
+			child.kill("SIGKILL");
+			exitedInTime = await waitForCatalogExit(exited, 5000);
+		}
+		if (!exitedInTime) this.onDiagnostic(`Daemon catalog process ${child.pid ?? "unknown"} did not exit`);
+		if (this.child === child) this.child = undefined;
 	}
 
 	private async spawnCatalog(): Promise<void> {
@@ -396,6 +406,7 @@ export class DaemonCatalogClient {
 			cwd: process.cwd(),
 			env: createCliSubprocessEnv({ ...process.env, [DAEMON_CATALOG_ROLE_ENV]: "1" }),
 			stdio: ["ignore", "ignore", "ignore", "ipc"],
+			windowsHide: process.platform === "win32",
 		});
 		this.child = child;
 		child.on("message", (value: unknown) => this.handleMessage(value));
@@ -507,5 +518,19 @@ export class DaemonCatalogClient {
 			pending.reject(error);
 			this.pending.delete(id);
 		}
+	}
+}
+
+async function waitForCatalogExit(exited: Promise<void>, timeoutMs: number): Promise<boolean> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			exited.then(() => true),
+			new Promise<boolean>((resolveTimeout) => {
+				timeout = setTimeout(() => resolveTimeout(false), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
 	}
 }

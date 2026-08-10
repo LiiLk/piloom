@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultPackageManager, type ProgressEvent, type ResolvedResource } from "../src/core/package-manager.js";
@@ -10,6 +10,10 @@ import { shouldUseWindowsShell } from "../src/utils/child-process.js";
 
 function normalizeForMatch(value: string): string {
 	return value.replace(/\\/g, "/");
+}
+
+function symlinkDirectory(target: string, linkPath: string): void {
+	symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
 }
 
 function pathEndsWith(actualPath: string, suffix: string): boolean {
@@ -190,14 +194,14 @@ Content`,
 
 				mkdirSync(join(agentDir), { recursive: true });
 				mkdirSync(join(tempDir, ".prime", "agent"), { recursive: true });
-				symlinkSync(sharedExtensionsDir, join(agentDir, "extensions"), "dir");
-				symlinkSync(sharedSkillsDir, join(agentDir, "skills"), "dir");
-				symlinkSync(sharedPromptsDir, join(agentDir, "prompts"), "dir");
-				symlinkSync(sharedThemesDir, join(agentDir, "themes"), "dir");
-				symlinkSync(sharedExtensionsDir, join(tempDir, ".prime", "agent", "extensions"), "dir");
-				symlinkSync(sharedSkillsDir, join(tempDir, ".prime", "agent", "skills"), "dir");
-				symlinkSync(sharedPromptsDir, join(tempDir, ".prime", "agent", "prompts"), "dir");
-				symlinkSync(sharedThemesDir, join(tempDir, ".prime", "agent", "themes"), "dir");
+				symlinkDirectory(sharedExtensionsDir, join(agentDir, "extensions"));
+				symlinkDirectory(sharedSkillsDir, join(agentDir, "skills"));
+				symlinkDirectory(sharedPromptsDir, join(agentDir, "prompts"));
+				symlinkDirectory(sharedThemesDir, join(agentDir, "themes"));
+				symlinkDirectory(sharedExtensionsDir, join(tempDir, ".prime", "agent", "extensions"));
+				symlinkDirectory(sharedSkillsDir, join(tempDir, ".prime", "agent", "skills"));
+				symlinkDirectory(sharedPromptsDir, join(tempDir, ".prime", "agent", "prompts"));
+				symlinkDirectory(sharedThemesDir, join(tempDir, ".prime", "agent", "themes"));
 
 				const result = await packageManager.resolve();
 
@@ -539,6 +543,22 @@ Content`,
 			expect(shouldUseWindowsShell("pnpm")).toBe(true);
 			expect(shouldUseWindowsShell("C:/Program Files/nodejs/npm.cmd")).toBe(true);
 		});
+
+		it.runIf(process.platform === "win32")(
+			"quotes Windows-shell command paths and arguments containing spaces",
+			async () => {
+				vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+				const pathWithSpaces = join(tempDir, "path with spaces");
+				const npmCommand = join(dirname(process.execPath), "npm.cmd");
+				const managerWithInternals = packageManager as unknown as {
+					runCommandCapture(command: string, args: string[]): Promise<string>;
+				};
+
+				await expect(
+					managerWithInternals.runCommandCapture(npmCommand, ["prefix", "--prefix", pathWithSpaces]),
+				).resolves.toBe(pathWithSpaces);
+			},
+		);
 	});
 
 	describe("npmCommand", () => {

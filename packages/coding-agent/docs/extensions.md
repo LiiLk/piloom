@@ -4,7 +4,7 @@
 
 Extensions are TypeScript modules that extend Prime Agent's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
-> **Placement for /reload:** Put extensions in `~/.prime/agent/extensions/` (global) or `.prime/agent/extensions/` (project-local) for auto-discovery. Use `prime-agent -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
+> **Placement for /reload:** Put extensions in `~/.prime/agent/extensions/` (global) or `.prime/agent/extensions/` (project-local) for auto-discovery. Use `piloom -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
@@ -102,7 +102,7 @@ export default function (pi: ExtensionAPI) {
 Test with `--extension` (or `-e`) flag:
 
 ```bash
-prime-agent -e ./my-extension.ts
+piloom -e ./my-extension.ts
 ```
 
 ## Extension Locations
@@ -146,7 +146,7 @@ To share extensions via npm or git as Prime Agent packages, see [packages.md](pa
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
-For distributed Prime Agent packages installed with `prime-agent package install` (npm or git), runtime dependencies must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
+For distributed Prime Agent packages installed with `piloom package install` (npm or git), runtime dependencies must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
 
 Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 
@@ -214,7 +214,7 @@ export default async function (pi: ExtensionAPI) {
 }
 ```
 
-This pattern makes the fetched models available during normal startup and to `prime-agent model list`.
+This pattern makes the fetched models available during normal startup and to `piloom model list`.
 
 ### Extension Styles
 
@@ -1545,7 +1545,7 @@ Register or override a model provider dynamically. Useful for proxies, custom en
 
 Calls made during the extension factory function are queued and applied once the runner initialises. Calls made after that — for example from a command handler following a user setup flow — take effect immediately without requiring a `/reload`.
 
-If you need to discover models from a remote endpoint, prefer an async extension factory over deferring the fetch to `session_start`. Prime Agent waits for the factory before startup continues, so the registered models are available immediately, including to `prime-agent model list`.
+If you need to discover models from a remote endpoint, prefer an async extension factory over deferring the fetch to `session_start`. Prime Agent waits for the factory before startup continues, so the registered models are available immediately, including to `piloom model list`.
 
 ```typescript
 // Register a new provider with custom models
@@ -1828,13 +1828,13 @@ Extensions can override built-in tools (`ipython`, `bash`, `edit`) by registerin
 
 ```bash
 # Extension's ipython tool replaces built-in ipython
-prime-agent -e ./tool-override.ts
+piloom -e ./tool-override.ts
 ```
 
 Alternatively, use `--no-builtin-tools` to start without any built-in tools while keeping extension tools enabled:
 ```bash
 # No built-in tools, only extension tools
-prime-agent --no-builtin-tools -e ./my-extension.ts
+piloom --no-builtin-tools -e ./my-extension.ts
 ```
 
 See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete override example.
@@ -1846,7 +1846,7 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
-- [ipython.ts](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/tools/ipython.ts) - `IpythonToolDetails`
+- [ipython.ts](https://github.com/LiiLk/piloom/blob/main/packages/coding-agent/src/core/tools/ipython.ts) - `IpythonToolDetails`
 - [bash.ts](../src/core/tools/bash.ts) - `BashToolDetails`
 - [edit.ts](../src/core/tools/edit.ts)
 

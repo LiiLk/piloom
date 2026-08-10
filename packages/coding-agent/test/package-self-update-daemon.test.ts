@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as DaemonUpdateRestartModule from "../src/cli/daemon-update-restart.js";
 import {
@@ -175,6 +175,10 @@ function useFixedOwnerHello(): void {
 	};
 }
 
+function isNpmSpawnCall(call: string): boolean {
+	return call.startsWith("spawn:") && /npm(?:\.cmd)?(?:[" ]|$)/iu.test(call);
+}
+
 vi.mock("child_process", () => ({
 	spawn: vi.fn((command: string, args: string[]) => {
 		mockState.calls.push(`spawn:${command} ${args.join(" ")}`);
@@ -220,6 +224,7 @@ vi.mock("../src/cli/daemon-update-restart.js", async (importOriginal) => {
 
 vi.mock("../src/modes/daemon/daemon-socket.js", async (importOriginal) => ({
 	...(await importOriginal<typeof DaemonSocketModule>()),
+	defaultDaemonSocketDir: () => dirname(mockState.socketPath),
 	defaultDaemonSocketPath: () => mockState.socketPath,
 }));
 
@@ -575,7 +580,7 @@ describe("self-update daemon restart", () => {
 		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
 
 		expect(process.exitCode).toBe(SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE);
-		expect(mockState.calls.some((call) => call.startsWith("spawn:npm "))).toBe(false);
+		expect(mockState.calls.some(isNpmSpawnCall)).toBe(false);
 	});
 
 	it("does not use the no-change sentinel when interactive self-update is cancelled", async () => {
@@ -598,7 +603,7 @@ describe("self-update daemon restart", () => {
 			await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);
 
 			expect(process.exitCode).toBe(1);
-			expect(mockState.calls.some((call) => call.startsWith("spawn:npm "))).toBe(false);
+			expect(mockState.calls.some(isNpmSpawnCall)).toBe(false);
 		} finally {
 			errorSpy.mockRestore();
 		}
@@ -629,7 +634,7 @@ describe("self-update daemon restart", () => {
 		await expect(handlePackageCommand(["update", "--self", "--daemon-socket", customSocketPath])).resolves.toBe(true);
 
 		expect(mockState.probeSocketPaths).toEqual([customSocketPath]);
-		expect(mockState.calls.some((call) => call.startsWith("spawn:npm "))).toBe(true);
+		expect(mockState.calls.some(isNpmSpawnCall)).toBe(true);
 		expect(mockState.calls.some((call) => call.startsWith("launch-coordinator:"))).toBe(false);
 	});
 
@@ -885,7 +890,7 @@ describe("self-update daemon restart", () => {
 			await expect(performUpdateAndRunCoordinator()).resolves.toBeUndefined();
 
 			expect(process.exitCode).toBeUndefined();
-			const spawnIndex = mockState.calls.findIndex((call) => call.startsWith("spawn:npm "));
+			const spawnIndex = mockState.calls.findIndex(isNpmSpawnCall);
 			const launchIndex = mockState.calls.indexOf(`launch-coordinator:${mockState.socketPath}`);
 			const fenceIndex = mockState.calls.indexOf("persist-daemon-startup-fence");
 			const prepareIndex = mockState.calls.indexOf("daemon-request:prepare_update_restart");
@@ -904,7 +909,12 @@ describe("self-update daemon restart", () => {
 			expect(releaseAdmissionIndex).toBeGreaterThan(startupFenceIndex);
 			expect(ensureIndex).toBeGreaterThan(releaseAdmissionIndex);
 			expect(ensureIndex).toBeGreaterThan(shutdownIndex);
-			expect(statSync(join(agentDir, "update-restarts", "test-status.json")).mode & 0o777).toBe(0o600);
+			const statusFile = statSync(join(agentDir, "update-restarts", "test-status.json"));
+			expect(statusFile.isFile()).toBe(true);
+			if (process.platform !== "win32") {
+				// Windows reports ACL-backed files with synthetic POSIX mode bits.
+				expect(statusFile.mode & 0o777).toBe(0o600);
+			}
 		} finally {
 			errorSpy.mockRestore();
 			logSpy.mockRestore();

@@ -1,15 +1,21 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type * as ChildProcessModule from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const childProcessMock = vi.hoisted(() => ({ spawn: vi.fn() }));
+
+vi.mock("node:child_process", async (importOriginal) => ({
+	...(await importOriginal<typeof ChildProcessModule>()),
+	spawn: childProcessMock.spawn,
+}));
+
 import { KernelManager } from "../src/core/kernel/index.js";
 
 let tempDir = "";
-
-function writeExecutable(filePath: string, content: string): void {
-	writeFileSync(filePath, content);
-	chmodSync(filePath, 0o755);
-}
 
 describe("KernelManager startup", () => {
 	beforeEach(() => {
@@ -24,10 +30,21 @@ describe("KernelManager startup", () => {
 	});
 
 	it("surfaces kernels that exit before resolving ports", async () => {
-		const python = join(tempDir, "python");
-		writeExecutable(python, ["#!/bin/sh", 'echo "fake kernel died before binding" >&2', "exit 42", ""].join("\n"));
+		childProcessMock.spawn.mockImplementation(() => {
+			const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter; kill: () => boolean };
+			child.stderr = new EventEmitter();
+			child.kill = () => true;
+			queueMicrotask(() => {
+				child.stderr.emit("data", Buffer.from("fake kernel died before binding\n"));
+				child.emit("exit", 42, null);
+			});
+			return child as unknown as ChildProcess;
+		});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-		const manager = new KernelManager({ python, cwd: tempDir });
+		const manager = new KernelManager({
+			python: process.execPath,
+			cwd: tempDir,
+		});
 
 		try {
 			await expect(manager.execute("print(1)")).rejects.toThrow(
