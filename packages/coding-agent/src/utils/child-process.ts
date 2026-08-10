@@ -4,6 +4,14 @@ import { constants } from "node:os";
 const EXIT_STDIO_GRACE_MS = 100;
 
 const WINDOWS_SHELL_COMMANDS = new Set(["bun", "npm", "npx", "pnpm", "yarn", "yarnpkg", "corepack"]);
+const WINDOWS_SHELL_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+const WINDOWS_COMMAND_SHIM_PATTERN = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i;
+
+export interface PreparedWindowsInvocation {
+	command: string;
+	args: string[];
+	windowsVerbatimArguments?: boolean;
+}
 
 export function shouldUseWindowsShell(command: string): boolean {
 	if (process.platform !== "win32") return false;
@@ -11,20 +19,37 @@ export function shouldUseWindowsShell(command: string): boolean {
 	return commandName.endsWith(".cmd") || commandName.endsWith(".bat") || WINDOWS_SHELL_COMMANDS.has(commandName);
 }
 
-export function quoteWindowsShellArgument(value: string): string {
-	if (process.platform !== "win32" || !/[\s&|<>()^"%]/.test(value)) {
-		return value;
+function rejectWindowsCommandControlCharacters(value: string): void {
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error("Windows command arguments cannot contain NUL or newline characters");
 	}
-	return `"${value.replaceAll("%", "^%").replaceAll('"', '\\"')}"`;
 }
 
-export function prepareWindowsShellInvocation(command: string, args: string[]): { command: string; args: string[] } {
+function escapeWindowsCommand(value: string): string {
+	rejectWindowsCommandControlCharacters(value);
+	return value.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+}
+
+function escapeWindowsArgument(value: string, doubleEscapeMetaCharacters: boolean): string {
+	rejectWindowsCommandControlCharacters(value);
+	let escaped = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
+	escaped = `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+	return doubleEscapeMetaCharacters ? escaped.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1") : escaped;
+}
+
+export function prepareWindowsShellInvocation(command: string, args: string[]): PreparedWindowsInvocation {
 	if (!shouldUseWindowsShell(command)) {
 		return { command, args };
 	}
+	const doubleEscapeMetaCharacters = WINDOWS_COMMAND_SHIM_PATTERN.test(command);
+	const commandLine = [
+		escapeWindowsCommand(command),
+		...args.map((argument) => escapeWindowsArgument(argument, doubleEscapeMetaCharacters)),
+	].join(" ");
 	return {
-		command: quoteWindowsShellArgument(command),
-		args: args.map(quoteWindowsShellArgument),
+		command: process.env.ComSpec ?? "cmd.exe",
+		args: ["/d", "/s", "/c", `"${commandLine}"`],
+		windowsVerbatimArguments: true,
 	};
 }
 

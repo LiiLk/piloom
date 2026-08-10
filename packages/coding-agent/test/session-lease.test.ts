@@ -11,6 +11,7 @@ import {
 	SESSION_LEASE_OWNER_ID_ENV,
 	SESSION_LEASES_ENABLED_ENV,
 	SessionAlreadyActiveError,
+	sessionLeaseKeyPath,
 } from "../src/core/session-lease.js";
 
 const tempDirs: string[] = [];
@@ -96,7 +97,7 @@ describe("session leases", () => {
 	it("reclaims a lease whose owner process is gone", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(resolve(agentDir, "stale.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const key = createHash("sha256").update(sessionLeaseKeyPath(sessionPath)).digest("hex");
 		const lockDirectory = join(agentDir, "session-leases", `${key}.lock`);
 		mkdirSync(lockDirectory, { recursive: true });
 		writeFileSync(
@@ -119,7 +120,7 @@ describe("session leases", () => {
 	it("reports guard contention as a coordination failure", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(join(agentDir, "session.jsonl"));
-		const leaseKeyPath = process.platform === "win32" ? sessionPath.toLowerCase() : sessionPath;
+		const leaseKeyPath = sessionLeaseKeyPath(sessionPath);
 		const key = createHash("sha256").update(leaseKeyPath).digest("hex");
 		const leaseRoot = join(agentDir, "session-leases");
 		const lockDirectory = join(leaseRoot, `${key}.lock`);
@@ -174,10 +175,16 @@ describe("session leases", () => {
 		first?.release();
 	});
 
+	it("preserves distinct names in a case-sensitive Windows directory", () => {
+		expect(sessionLeaseKeyPath("C:\\sessions\\Session.jsonl", "win32", true)).not.toBe(
+			sessionLeaseKeyPath("C:\\sessions\\session.jsonl", "win32", true),
+		);
+	});
+
 	it("reclaims a lease after its pid has been reused", () => {
 		const agentDir = createTempDir();
 		const sessionPath = canonicalSessionPath(resolve(agentDir, "reused-pid.jsonl"));
-		const key = createHash("sha256").update(sessionPath).digest("hex");
+		const key = createHash("sha256").update(sessionLeaseKeyPath(sessionPath)).digest("hex");
 		const lockDirectory = join(agentDir, "session-leases", `${key}.lock`);
 		mkdirSync(lockDirectory, { recursive: true });
 		writeFileSync(

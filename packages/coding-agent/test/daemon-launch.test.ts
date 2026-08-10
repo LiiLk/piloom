@@ -14,8 +14,13 @@ import {
 } from "../src/cli/daemon-launch.js";
 import { ENV_AGENT_DIR, getDaemonLogPath, VERSION } from "../src/config.js";
 import { DAEMON_PROTOCOL_VERSION, DAEMON_SCHEMA_ID } from "../src/modes/daemon/daemon-protocol.js";
+import { verifyDaemonPublicAuthentication } from "../src/modes/daemon/daemon-public-auth.js";
+import { acquireDaemonSupervisorOwnership } from "../src/modes/daemon/daemon-supervisor-ownership.js";
+
+const REGISTRY_ENV = "PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_REGISTRY_DIR";
 
 interface FakeDaemonOptions {
+	socketPath?: string;
 	/** Sessions returned for a `list` command. */
 	sessions?: Array<Record<string, unknown>>;
 	busyClientOwnedSessionCount?: number;
@@ -48,7 +53,23 @@ function send(socket: Socket, message: unknown): void {
 
 async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDaemon> {
 	const dir = mkdtempSync(join(tmpdir(), "pa-launch-"));
-	const socketPath = testSocketPath("fake", dir);
+	const socketPath = options.socketPath ?? testSocketPath("fake", dir);
+	const generation = `fake-${randomUUID()}`;
+	const registryDir = join(dir, "registry");
+	const ownership =
+		process.platform === "win32" && (options.protocolVersion ?? DAEMON_PROTOCOL_VERSION) === DAEMON_PROTOCOL_VERSION
+			? await acquireDaemonSupervisorOwnership({
+					socketPath,
+					descriptorDir: join(dir, "descriptors"),
+					agentDir: join(dir, "agent"),
+					generation,
+					appVersion: options.appVersion ?? VERSION,
+					registryDir,
+				})
+			: undefined;
+	if (ownership) {
+		process.env[REGISTRY_ENV] = registryDir;
+	}
 	const server: Server = createServer((socket) => {
 		socket.on("error", () => undefined);
 		send(socket, {
@@ -57,8 +78,11 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 			protocol: { name: "prime-agent.daemon", version: options.protocolVersion ?? DAEMON_PROTOCOL_VERSION },
 			appVersion: options.appVersion,
 			schemaId: options.schemaId ?? DAEMON_SCHEMA_ID,
+			supervisorGeneration: generation,
 			clientId: "fake-client",
-			serverCapabilities: options.serverCapabilities ?? [],
+			serverCapabilities: ownership
+				? [...(options.serverCapabilities ?? []), "windows_pipe_auth"]
+				: (options.serverCapabilities ?? []),
 		});
 		let buffer = "";
 		socket.on("data", (chunk) => {
@@ -77,6 +101,19 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 					command?: { type: string; id: string };
 				};
 				const command = wire.type === "command" && wire.command ? wire.command : wire;
+				if (command.type === "daemon_auth" && ownership) {
+					const result = verifyDaemonPublicAuthentication(line, ownership.authenticationToken);
+					send(socket, {
+						type: "response",
+						command: "daemon_auth",
+						id: wire.id,
+						success: result.authenticated,
+						...(result.authenticated
+							? { data: { proof: result.serverProof } }
+							: { error: "Daemon authentication failed" }),
+					});
+					continue;
+				}
 				options.onCommand?.(command);
 				if (command.type === "list") {
 					send(socket, {
@@ -107,11 +144,14 @@ async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDae
 	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 	return {
 		socketPath,
-		close: () =>
-			new Promise<void>((resolve) => {
-				server.close(() => resolve());
-				rmSync(dir, { recursive: true, force: true });
-			}),
+		close: async () => {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await ownership?.release();
+			if (process.env[REGISTRY_ENV] === registryDir) {
+				delete process.env[REGISTRY_ENV];
+			}
+			rmSync(dir, { recursive: true, force: true });
+		},
 	};
 }
 
@@ -356,31 +396,20 @@ describe("ensureInteractiveDaemonRunning", () => {
 		writeFileSync(entrypoint, "process.exit(7);");
 		const originalEntrypoint = process.argv[1]!;
 		process.argv[1] = entrypoint;
-		const server: Server = createServer((socket) => {
-			socket.on("error", () => undefined);
-			send(socket, {
-				type: "daemon_hello",
-				socketPath,
-				protocol: { name: "prime-agent.daemon", version: DAEMON_PROTOCOL_VERSION },
-				appVersion: VERSION,
-				schemaId: DAEMON_SCHEMA_ID,
-				clientId: "fake-client",
-				serverCapabilities: [],
-			});
-		});
+		let winningDaemon: FakeDaemon | undefined;
 
 		try {
 			const ensurePromise = ensureInteractiveDaemonRunning(socketPath);
 			// Let the child exit first, then bring up the winning daemon inside
 			// the exit grace window.
 			await new Promise((resolve) => setTimeout(resolve, 300));
-			await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+			winningDaemon = await startFakeDaemon({ socketPath, appVersion: VERSION, schemaId: DAEMON_SCHEMA_ID });
 			await expect(ensurePromise).resolves.toBeUndefined();
 		} finally {
 			process.argv[1] = originalEntrypoint;
 			if (originalAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
 			else process.env[ENV_AGENT_DIR] = originalAgentDir;
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await winningDaemon?.close();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

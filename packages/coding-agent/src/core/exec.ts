@@ -3,7 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { prepareWindowsShellInvocation, shouldUseWindowsShell, waitForChildProcess } from "../utils/child-process.js";
+import { prepareWindowsShellInvocation, waitForChildProcess } from "../utils/child-process.js";
 import { killProcessTree } from "../utils/shell.js";
 
 /**
@@ -62,7 +62,7 @@ export async function execCommand(
 		const invocation = prepareWindowsShellInvocation(command, args);
 		const proc = spawn(invocation.command, invocation.args, {
 			cwd,
-			shell: shouldUseWindowsShell(command),
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 			windowsHide: process.platform === "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 			// Merge per-call env over the parent env so callers can scope vars

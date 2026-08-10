@@ -67,7 +67,7 @@ import {
 	DAEMON_WORKER_ACTIVE_SESSION_ID_ENV,
 	DAEMON_WORKER_SUPERVISOR_SOCKET_ENV,
 } from "./modes/daemon/daemon-worker-protocol.js";
-import { shouldUseWindowsShell } from "./utils/child-process.js";
+import { prepareWindowsShellInvocation } from "./utils/child-process.js";
 import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.js";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
@@ -462,10 +462,11 @@ async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
 	console.log(chalk.dim(`Updating ${APP_NAME} with ${command.display}...`));
 	for (const step of command.steps ?? [command]) {
 		await new Promise<void>((resolve, reject) => {
-			// Windows package managers are commonly .cmd shims. Use the shell so Node can execute them.
-			const child = spawn(step.command, step.args, {
+			const invocation = prepareWindowsShellInvocation(step.command, step.args);
+			const child = spawn(invocation.command, invocation.args, {
 				stdio: "inherit",
-				shell: shouldUseWindowsShell(step.command),
+				windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+				windowsHide: process.platform === "win32",
 			});
 			child.on("error", (error) => {
 				reject(error);

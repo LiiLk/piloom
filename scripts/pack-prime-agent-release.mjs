@@ -212,22 +212,33 @@ function copyPackageContents(sourceDir, targetDir, packageJson) {
 	}
 }
 
-function quoteWindowsShellArgument(value) {
-	if (process.platform !== "win32" || !/[\s&|<>()^"%]/.test(value)) {
-		return value;
+const WINDOWS_SHELL_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeWindowsShellValue(value, command) {
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error("Windows command arguments cannot contain NUL or newline characters");
 	}
-	return `"${value.replaceAll("%", "^%").replaceAll('"', '\\"')}"`;
+	if (command) {
+		return value.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
+	}
+	const escaped = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
+	return `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
 }
 
 function run(command, args, cwd) {
 	const useWindowsShell = process.platform === "win32" && command === "npm";
-	const invocationCommand = useWindowsShell ? "npm.cmd" : command;
-	const invocationArgs = useWindowsShell ? args.map(quoteWindowsShellArgument) : args;
+	const shellCommand = useWindowsShell
+		? [escapeWindowsShellValue("npm", true), ...args.map((argument) => escapeWindowsShellValue(argument, false))].join(
+				" ",
+			)
+		: undefined;
+	const invocationCommand = useWindowsShell ? (process.env.ComSpec ?? "cmd.exe") : command;
+	const invocationArgs = shellCommand ? ["/d", "/s", "/c", `"${shellCommand}"`] : args;
 	const result = spawnSync(invocationCommand, invocationArgs, {
 		cwd,
 		stdio: "pipe",
 		encoding: "utf8",
-		shell: useWindowsShell,
+		windowsVerbatimArguments: useWindowsShell,
 		windowsHide: useWindowsShell,
 	});
 

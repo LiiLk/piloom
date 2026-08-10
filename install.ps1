@@ -155,6 +155,13 @@ function Verify-Checksum([string]$ChecksumPath, [string]$TarballPath) {
 if ($baseUrl -eq $unconfiguredBaseUrl) {
 	Fail "The installer download URL is not configured. Set PRIME_AGENT_DOWNLOAD_BASE_URL or use the installer published by the release workflow."
 }
+$downloadBaseUri = $null
+if (-not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$downloadBaseUri)) {
+	Fail "The installer download URL is invalid: $baseUrl"
+}
+if ($downloadBaseUri.Scheme -ne "https" -and $env:PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS -ne "1") {
+	Fail "The installer requires HTTPS downloads. Set PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS=1 only for local development."
+}
 
 try {
 	Assert-NodeVersion

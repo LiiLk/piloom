@@ -39,17 +39,26 @@ describe("shouldUseWindowsShell", () => {
 			"caret^value",
 			"pipe|value",
 			'quote"value',
+			'safe" & echo PILOOM_INJECTED & rem "',
 			"percent%PATH%value",
 		];
 		const invocation = prepareWindowsShellInvocation(resolve(__dirname, "fixtures/echo-args.cmd"), args);
 		const result = spawnSync(invocation.command, invocation.args, {
 			encoding: "utf8",
-			shell: true,
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 			windowsHide: true,
 		});
 
 		expect(result.status, result.stderr).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual(args);
+	});
+
+	it("rejects command-line control characters before spawning a Windows shell", () => {
+		vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+		expect(() => prepareWindowsShellInvocation("npm", ["safe\r\necho injected"])).toThrow(
+			"cannot contain NUL or newline",
+		);
 	});
 });
 

@@ -11,8 +11,9 @@
 - Fixed remaining noninteractive Windows fallbacks opening consoles during config resolution, clipboard use, OAuth browser launch, and GitHub sharing.
 - Fixed Windows Git Bash child environments so shell utilities remain available to bash tools and command-backed credentials.
 - Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by a native `--version` smoke test.
-- Added DPAPI-authenticated Windows daemon pipes and Job Object cleanup for frontend-owned worker process trees.
-- Fixed Windows command shims treating shell metacharacters as command syntax instead of literal arguments.
+- Added fail-closed, mutually authenticated Windows daemon pipes and Job Object cleanup for frontend-owned worker process trees.
+- Fixed Windows command shims preserving arguments through `cmd.exe` without allowing metacharacter injection.
+- Fixed custom uv install directories and session leases in case-sensitive Windows directories.
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
 - Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prime-agent` ([#844](https://github.com/PrimeIntellect-ai/prime-agent/issues/844))

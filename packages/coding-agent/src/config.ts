@@ -15,7 +15,7 @@ import {
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import { prepareWindowsShellInvocation, shouldUseWindowsShell } from "./utils/child-process.js";
+import { prepareWindowsShellInvocation } from "./utils/child-process.js";
 
 // =============================================================================
 // Package Detection
@@ -210,7 +210,7 @@ function readCommandOutput(
 	const result = spawnSync(invocation.command, invocation.args, {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
-		shell: shouldUseWindowsShell(command),
+		windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 		windowsHide: process.platform === "win32",
 	});
 	if (result.status === 0) return result.stdout.trim() || undefined;

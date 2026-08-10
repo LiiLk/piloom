@@ -262,6 +262,23 @@ describe("kernel bootstrap", () => {
 		}
 	});
 
+	it("treats UV_UNMANAGED_INSTALL as the uv executable directory", async () => {
+		const installDir = join(tempDir, "managed-tools");
+		const uvPath = join(installDir, "uv.exe");
+		mkdirSync(installDir, { recursive: true });
+		writeExecutable(uvPath, "installed uv\n");
+		process.env.UV_UNMANAGED_INSTALL = installDir;
+		process.env.PATH = "";
+		const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+		try {
+			expect(getUvExecutableCandidates()).toContain(uvPath);
+			expect(await findUvExecutable()).toBe(uvPath);
+		} finally {
+			platformSpy.mockRestore();
+		}
+	});
+
 	it("selects the platform-specific uv installer without executing it", () => {
 		expect(getUvInstallInvocation("win32")).toEqual({
 			command: "powershell",

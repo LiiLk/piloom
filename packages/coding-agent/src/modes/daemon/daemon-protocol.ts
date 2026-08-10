@@ -49,7 +49,7 @@ import type { SessionSummary } from "./daemon-session-list.js";
  */
 
 export const DAEMON_PROTOCOL_NAME = "prime-agent.daemon";
-export const DAEMON_PROTOCOL_VERSION = 8;
+export const DAEMON_PROTOCOL_VERSION = 9;
 export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 9 publishes persisted RLM spawn depth on passive session rows.
 // Revision 10 publishes persisted RLM spawn depth on all session catalog rows.
@@ -58,8 +58,9 @@ export const DAEMON_COMMAND_ENVELOPE_MIN_PROTOCOL_VERSION = 7;
 // Revision 13 narrows agent-origin reach and roster wire shapes to the nuclear family.
 // Revision 14 carries the client's monotonic telemetry opt-out on attach and reattach.
 // Revision 15 adds authenticated public Windows named-pipe startup.
-export const DAEMON_SCHEMA_REVISION = 15;
-export const DAEMON_SCHEMA_ID = "protocol-8-schema-15-073a222d9a70";
+// Revision 16 replaces bearer-token authentication with mutual HMAC proof.
+export const DAEMON_SCHEMA_REVISION = 16;
+export const DAEMON_SCHEMA_ID = "protocol-9-schema-16-aaedd7da7a08";
 
 export type DaemonProtocolName = typeof DAEMON_PROTOCOL_NAME;
 export type DaemonProtocolVersion = number;
@@ -352,7 +353,7 @@ export type DaemonSavedSessionListCommand =
 	  };
 
 export type DaemonCommand =
-	| { id?: string; type: "daemon_auth"; token: string }
+	| { id?: string; type: "daemon_auth"; nonce: string; proof: string }
 	| {
 			id?: string;
 			type: "list";
@@ -646,7 +647,7 @@ const DELETE_RLM_SUBAGENT_COMMAND = {
 } as const;
 const FLAT_SESSION_TREE_COMMAND = { minProtocol: 7 } as const;
 const TELEMETRY_POLICY_COMMAND = { minProtocol: 7, minSchemaRevision: 14 } as const;
-const WINDOWS_PIPE_AUTH_COMMAND = { minProtocol: 8, capability: "windows_pipe_auth" } as const;
+const WINDOWS_PIPE_AUTH_COMMAND = { minProtocol: 9, capability: "windows_pipe_auth" } as const;
 
 export const DAEMON_COMMAND_COMPATIBILITY = {
 	daemon_auth: WINDOWS_PIPE_AUTH_COMMAND,
@@ -865,8 +866,6 @@ export type DaemonOutbound =
 			supervisorProcessStartId?: string;
 			/** Normalized socket identity stored in the durable owner record. */
 			supervisorSocketPath?: string;
-			/** DPAPI current-user blob used only when windows_pipe_auth is advertised. */
-			supervisorProtectedAuthenticationToken?: string;
 			clientId: DaemonClientId;
 			serverCapabilities: readonly DaemonServerCapability[];
 	  }

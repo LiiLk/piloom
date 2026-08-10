@@ -547,7 +547,9 @@ export function getUvExecutableCandidates(platform: NodeJS.Platform = process.pl
 	const executableName = platform === "win32" ? "uv.exe" : "uv";
 	const candidatePaths = [
 		process.env.UV_INSTALL_DIR ? path.join(expandHome(process.env.UV_INSTALL_DIR), executableName) : undefined,
-		process.env.UV_UNMANAGED_INSTALL ? expandHome(process.env.UV_UNMANAGED_INSTALL) : undefined,
+		process.env.UV_UNMANAGED_INSTALL
+			? path.join(expandHome(process.env.UV_UNMANAGED_INSTALL), executableName)
+			: undefined,
 		getUvExecutablePath(platform),
 	].filter((candidate): candidate is string => Boolean(candidate));
 	return [...new Set(candidatePaths)];

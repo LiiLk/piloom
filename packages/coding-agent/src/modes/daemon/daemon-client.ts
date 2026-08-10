@@ -19,7 +19,8 @@ import {
 	getDaemonCommandCompatibilities,
 	isDaemonMutatingCommand,
 } from "./daemon-protocol.js";
-import { unprotectDaemonSupervisorAuthenticationToken } from "./daemon-supervisor-ownership.js";
+import { createDaemonClientAuthenticationProof, verifyDaemonServerAuthenticationProof } from "./daemon-public-auth.js";
+import { readDaemonSupervisorAuthenticationToken } from "./daemon-supervisor-ownership.js";
 import type { DaemonWorkerCommand, DaemonWorkerCommandBody } from "./daemon-worker-protocol.js";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -474,21 +475,28 @@ export class DaemonClient {
 			return;
 		}
 		try {
-			if (message.serverCapabilities?.includes("windows_pipe_auth")) {
-				if (!message.supervisorGeneration || !message.supervisorProtectedAuthenticationToken) {
-					throw new Error("Authenticated daemon hello is missing its protected authentication metadata");
+			if (process.platform === "win32" && this.socketPath.startsWith("\\\\.\\pipe\\")) {
+				if (!message.serverCapabilities?.includes("windows_pipe_auth") || !message.supervisorGeneration) {
+					throw new Error("Windows daemon authentication is required but was not advertised");
 				}
-				const token = unprotectDaemonSupervisorAuthenticationToken(
-					message.supervisorProtectedAuthenticationToken,
-					this.socketPath,
-					message.supervisorGeneration,
-				);
+				const token = readDaemonSupervisorAuthenticationToken(this.socketPath, message.supervisorGeneration);
 				if (!token) {
 					throw new Error("Unable to load the current Windows daemon authentication token");
 				}
-				const response = await this.requestWire({ type: "daemon_auth", token }, RECONNECT_HELLO_TIMEOUT_MS);
+				const nonce = randomUUID();
+				const response = await this.requestWire(
+					{ type: "daemon_auth", nonce, proof: createDaemonClientAuthenticationProof(token, nonce) },
+					RECONNECT_HELLO_TIMEOUT_MS,
+				);
 				if (!response.success) {
 					throw new Error(response.error);
+				}
+				const serverProof =
+					response.data && typeof response.data === "object" && "proof" in response.data
+						? (response.data as { proof?: unknown }).proof
+						: undefined;
+				if (typeof serverProof !== "string" || !verifyDaemonServerAuthenticationProof(token, nonce, serverProof)) {
+					throw new Error("Windows daemon server authentication failed");
 				}
 			}
 			if (this.socket !== socket || socket.destroyed) {

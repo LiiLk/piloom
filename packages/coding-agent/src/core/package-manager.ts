@@ -28,7 +28,7 @@ import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME, getBundledSkillsDir } from "../config.js";
-import { prepareWindowsShellInvocation, shouldUseWindowsShell } from "../utils/child-process.js";
+import { prepareWindowsShellInvocation } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
@@ -2382,7 +2382,7 @@ export class DefaultPackageManager implements PackageManager {
 		return spawn(invocation.command, invocation.args, {
 			cwd: options?.cwd,
 			stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
-			shell: shouldUseWindowsShell(command),
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 			env: getEnv(),
 			windowsHide: process.platform === "win32",
 		});
@@ -2398,7 +2398,7 @@ export class DefaultPackageManager implements PackageManager {
 		return spawn(invocation.command, invocation.args, {
 			cwd: options?.cwd,
 			stdio: ["ignore", "pipe", "pipe"],
-			shell: shouldUseWindowsShell(command),
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 			env: options?.env ? { ...baseEnv, ...options.env } : baseEnv,
 			windowsHide: process.platform === "win32",
 		});
@@ -2467,7 +2467,7 @@ export class DefaultPackageManager implements PackageManager {
 		const result = spawnSync(invocation.command, invocation.args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
-			shell: shouldUseWindowsShell(command),
+			windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 			env: getEnv(),
 			windowsHide: process.platform === "win32",
 		});

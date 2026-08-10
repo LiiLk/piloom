@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import koffi from "koffi";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR, getCronJobsPath } from "../src/config.js";
 import { AgentCronJobStore } from "../src/core/cron-jobs.js";
@@ -29,6 +30,80 @@ const blockingProcessPids = new Set<number>();
 const daemonSockets = new Set<string>();
 const childDiagnostics = new WeakMap<ChildProcess, { stdout: string; stderr: string }>();
 const PROCESS_STRESS_WORKERS = Number.parseInt(process.env.PRIME_AGENT_STRESS_WORKERS ?? "10", 10);
+const THREAD_SUSPEND_RESUME = 0x0002;
+const TH32CS_SNAPTHREAD = 0x00000004;
+
+const ThreadEntry32 = koffi.struct("PILOOM_TEST_THREADENTRY32", {
+	dwSize: "uint32",
+	cntUsage: "uint32",
+	th32ThreadID: "uint32",
+	th32OwnerProcessID: "uint32",
+	tpBasePri: "int32",
+	tpDeltaPri: "int32",
+	dwFlags: "uint32",
+});
+const testKernel32 = process.platform === "win32" ? koffi.load("kernel32.dll") : undefined;
+const createToolhelp32Snapshot = testKernel32?.func("void * __stdcall CreateToolhelp32Snapshot(uint32, uint32)");
+const thread32First = testKernel32?.func("bool __stdcall Thread32First(void *, _Inout_ PILOOM_TEST_THREADENTRY32 *)");
+const thread32Next = testKernel32?.func("bool __stdcall Thread32Next(void *, _Inout_ PILOOM_TEST_THREADENTRY32 *)");
+const openThread = testKernel32?.func("void * __stdcall OpenThread(uint32, bool, uint32)");
+const suspendThread = testKernel32?.func("uint32 __stdcall SuspendThread(void *)");
+const closeTestHandle = testKernel32?.func("bool __stdcall CloseHandle(void *)");
+
+function suspendProcessForStopRace(pid: number): void {
+	if (process.platform !== "win32") {
+		process.kill(pid, "SIGSTOP");
+		return;
+	}
+	if (
+		!createToolhelp32Snapshot ||
+		!thread32First ||
+		!thread32Next ||
+		!openThread ||
+		!suspendThread ||
+		!closeTestHandle
+	) {
+		throw new Error("Windows thread suspension APIs are unavailable");
+	}
+	const snapshot = createToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (!snapshot) {
+		throw new Error("Could not create a Windows thread snapshot");
+	}
+	let suspended = 0;
+	try {
+		const entry = {
+			dwSize: koffi.sizeof(ThreadEntry32),
+			cntUsage: 0,
+			th32ThreadID: 0,
+			th32OwnerProcessID: 0,
+			tpBasePri: 0,
+			tpDeltaPri: 0,
+			dwFlags: 0,
+		};
+		let hasEntry = Boolean(thread32First(snapshot, entry));
+		while (hasEntry) {
+			if (entry.th32OwnerProcessID === pid) {
+				const thread = openThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID);
+				if (thread) {
+					try {
+						if (suspendThread(thread) !== 0xffffffff) {
+							suspended++;
+						}
+					} finally {
+						closeTestHandle(thread);
+					}
+				}
+			}
+			entry.dwSize = koffi.sizeof(ThreadEntry32);
+			hasEntry = Boolean(thread32Next(snapshot, entry));
+		}
+	} finally {
+		closeTestHandle(snapshot);
+	}
+	if (suspended === 0) {
+		throw new Error(`Could not suspend worker process ${pid}`);
+	}
+}
 
 afterEach(async () => {
 	for (const socketPath of daemonSockets) {
@@ -867,7 +942,7 @@ describe("daemon supervisor resident workers", () => {
 		await waitForSocketGone(socketPath);
 	}, 30_000);
 
-	it.skipIf(process.platform === "win32")(
+	it(
 		"does not resurrect an intentionally stopped root when the supervisor dies during kill",
 		{ tags: ["process-stress"], timeout: 30_000 },
 		async () => {
@@ -919,7 +994,7 @@ describe("daemon supervisor resident workers", () => {
 			const heartbeat = (heartbeatResponse.data as { heartbeat: { id: string } }).heartbeat;
 			const cronStore = AgentCronJobStore.forSessionArtifacts();
 			cronStore.registerSessionArtifact(summary.sessionId, sessionManager.getSessionArtifactDir()!);
-			process.kill(summary.workerPid, "SIGSTOP");
+			suspendProcessForStopRace(summary.workerPid);
 			const killResult = client.request({ type: "kill", activeSessionId }).catch((error: unknown) => error);
 			const tombstone = await waitForWorkerStopTombstone(agentDir);
 			expect(tombstone.stopRequestedAt).toEqual(expect.any(String));

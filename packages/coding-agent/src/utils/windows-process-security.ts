@@ -4,6 +4,12 @@ import koffi from "koffi";
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9;
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 const CRYPTPROTECT_UI_FORBIDDEN = 0x1;
+const FILE_CASE_SENSITIVE_INFORMATION_CLASS = 23;
+const FILE_CS_FLAG_CASE_SENSITIVE_DIR = 0x00000001;
+const FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+const FILE_READ_ATTRIBUTES = 0x00000080;
+const FILE_SHARE_READ_WRITE_DELETE = 0x00000007;
+const OPEN_EXISTING = 3;
 
 interface DataBlobValue {
 	cbData: number;
@@ -48,6 +54,10 @@ const ExtendedLimitInformation = koffi.struct("PILOOM_JOBOBJECT_EXTENDED_LIMIT_I
 	PeakJobMemoryUsed: "uintptr",
 });
 
+const FileCaseSensitiveInformation = koffi.struct("PILOOM_FILE_CASE_SENSITIVE_INFORMATION", {
+	Flags: "uint32",
+});
+
 const createJobObject = kernel32?.func("void * __stdcall CreateJobObjectW(void *, str16)");
 const setInformationJobObject = kernel32?.func(
 	"bool __stdcall SetInformationJobObject(void *, int32, PILOOM_JOBOBJECT_EXTENDED_LIMIT_INFORMATION *, uint32)",
@@ -55,6 +65,12 @@ const setInformationJobObject = kernel32?.func(
 const assignProcessToJobObject = kernel32?.func("bool __stdcall AssignProcessToJobObject(void *, void *)");
 const getCurrentProcess = kernel32?.func("void * __stdcall GetCurrentProcess()");
 const closeHandle = kernel32?.func("bool __stdcall CloseHandle(void *)");
+const createFile = kernel32?.func(
+	"void * __stdcall CreateFileW(str16, uint32, uint32, void *, uint32, uint32, void *)",
+);
+const getFileInformationByHandleEx = kernel32?.func(
+	"bool __stdcall GetFileInformationByHandleEx(void *, int32, _Out_ PILOOM_FILE_CASE_SENSITIVE_INFORMATION *, uint32)",
+);
 const localFree = kernel32?.func("void * __stdcall LocalFree(void *)");
 const cryptProtectData = crypt32?.func(
 	"bool __stdcall CryptProtectData(PILOOM_DATA_BLOB *, str16, PILOOM_DATA_BLOB *, void *, void *, uint32, _Out_ PILOOM_DATA_BLOB *)",
@@ -141,6 +157,39 @@ function setWindowsJobLimitFlags(handle: unknown, limitFlags: number): boolean {
 
 export function createWindowsAuthenticationToken(): string {
 	return randomBytes(32).toString("base64url");
+}
+
+export function isWindowsDirectoryCaseSensitive(directory: string): boolean {
+	if (process.platform !== "win32" || !createFile || !getFileInformationByHandleEx || !closeHandle) {
+		return false;
+	}
+	const handle = createFile(
+		directory,
+		FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ_WRITE_DELETE,
+		null,
+		OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS,
+		null,
+	);
+	if (!handle) {
+		return false;
+	}
+	try {
+		const information = { Flags: 0 };
+		return (
+			Boolean(
+				getFileInformationByHandleEx(
+					handle,
+					FILE_CASE_SENSITIVE_INFORMATION_CLASS,
+					information,
+					koffi.sizeof(FileCaseSensitiveInformation),
+				),
+			) && (information.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) !== 0
+		);
+	} finally {
+		closeHandle(handle);
+	}
 }
 
 export function protectWindowsData(value: Buffer, entropy: Buffer): string {

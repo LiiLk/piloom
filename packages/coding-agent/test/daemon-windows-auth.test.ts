@@ -14,7 +14,10 @@ import {
 	getDaemonSupervisorServerCapabilities,
 	success,
 } from "../src/modes/daemon/daemon-protocol.js";
-import { verifyDaemonPublicAuthentication } from "../src/modes/daemon/daemon-public-auth.js";
+import {
+	createDaemonClientAuthenticationProof,
+	verifyDaemonPublicAuthentication,
+} from "../src/modes/daemon/daemon-public-auth.js";
 import { DaemonSupervisor } from "../src/modes/daemon/daemon-supervisor.js";
 import {
 	acquireDaemonSupervisorOwnership,
@@ -52,21 +55,24 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 		const recovered = readDaemonSupervisorAuthenticationToken(socketPath, generation, registryDir);
 		expect(recovered).toBe(ownership.authenticationToken);
 		expect(recovered).toBeTruthy();
+		const nonce = randomUUID();
 		expect(
 			verifyDaemonPublicAuthentication(
-				JSON.stringify({ id: "auth", type: "daemon_auth", token: recovered }),
+				JSON.stringify({
+					id: "auth",
+					type: "daemon_auth",
+					nonce,
+					proof: createDaemonClientAuthenticationProof(recovered!, nonce),
+				}),
 				recovered,
 			),
-		).toEqual({
-			authenticated: true,
-			id: "auth",
-		});
+		).toMatchObject({ authenticated: true, id: "auth", serverProof: expect.any(String) });
 		expect(
 			verifyDaemonPublicAuthentication(
 				JSON.stringify({
 					type: "command",
 					id: "old-client",
-					protocol: { name: "prime-agent.daemon", version: 7 },
+					protocol: { name: "prime-agent.daemon", version: 8 },
 					command: { type: "list" },
 				}),
 				recovered,
@@ -132,22 +138,16 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 
 		const receivedTypes: string[] = [];
 		const server = createServer((socket) => {
-			writeHello(
-				socket,
-				socketPath,
-				generation,
-				getDaemonSupervisorServerCapabilities("win32"),
-				undefined,
-				ownership.record.protectedAuthenticationToken,
-			);
+			writeHello(socket, socketPath, generation, getDaemonSupervisorServerCapabilities("win32"), undefined);
 			readJsonLines(socket, (message) => {
 				const type = typeof message.type === "string" ? message.type : "unknown";
 				receivedTypes.push(type);
 				if (type === "daemon_auth") {
-					const request = message as { id: string; token: string };
+					const request = message as { id: string; nonce: string; proof: string; token?: string };
+					expect(request.token).toBeUndefined();
 					const result = verifyDaemonPublicAuthentication(JSON.stringify(message), ownership.authenticationToken);
 					expect(result.authenticated).toBe(true);
-					socket.write(serializeJsonLine(success(request.id, "daemon_auth")));
+					socket.write(serializeJsonLine(success(request.id, "daemon_auth", { proof: result.serverProof })));
 					return;
 				}
 				const envelope = message as { id: string; command: { type: string } };
@@ -168,16 +168,42 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 		expect(receivedTypes).toEqual(["daemon_auth", "command"]);
 	});
 
-	it("keeps a new client compatible with an old daemon that does not advertise authentication", async () => {
+	it("rejects a daemon that does not advertise Windows authentication", async () => {
 		const socketPath = createPipePath();
 		const server = createServer((socket) => {
 			writeHello(socket, socketPath, "legacy", DAEMON_DEFAULT_SERVER_CAPABILITIES, 7);
+		});
+		await listen(server, socketPath);
+		cleanup.push(() => closeServer(server));
+
+		const client = new DaemonClient(socketPath);
+		cleanup.push(() => client.close());
+		await client.connect();
+		await expect(client.waitForHello()).rejects.toThrow("authentication is required");
+	});
+
+	it("rejects a server that cannot prove possession of the registry token", async () => {
+		const registryDir = createTempDirectory();
+		cleanup.push(() => rmSync(registryDir, { recursive: true, force: true }));
+		process.env[REGISTRY_ENV] = registryDir;
+		const socketPath = createPipePath();
+		const generation = `auth-${randomUUID()}`;
+		const ownership = await acquireDaemonSupervisorOwnership({
+			socketPath,
+			descriptorDir: join(registryDir, "descriptors"),
+			agentDir: join(registryDir, "agents"),
+			generation,
+			appVersion: "test",
+			registryDir,
+		});
+		cleanup.push(() => ownership.release());
+		const server = createServer((socket) => {
+			writeHello(socket, socketPath, generation, getDaemonSupervisorServerCapabilities("win32"));
 			readJsonLines(socket, (message) => {
-				expect(message.type).toBe("command");
-				const envelope = message as { id: string; protocol: { version: number }; command: { type: string } };
-				expect(envelope.protocol.version).toBe(7);
-				expect(envelope.command.type).toBe("list");
-				socket.write(serializeJsonLine(success(envelope.id, "list", [])));
+				const request = message as { id: string; type: string; token?: string };
+				expect(request.type).toBe("daemon_auth");
+				expect(request.token).toBeUndefined();
+				socket.write(serializeJsonLine(success(request.id, "daemon_auth", { proof: "attacker-proof" })));
 			});
 		});
 		await listen(server, socketPath);
@@ -186,8 +212,7 @@ describe.skipIf(process.platform !== "win32")("Windows daemon authentication", (
 		const client = new DaemonClient(socketPath);
 		cleanup.push(() => client.close());
 		await client.connect();
-		await client.waitForHello();
-		expect((await client.request({ type: "list" })).success).toBe(true);
+		await expect(client.waitForHello()).rejects.toThrow("server authentication failed");
 	});
 });
 
@@ -206,7 +231,6 @@ function writeHello(
 	generation: string,
 	serverCapabilities: readonly string[],
 	protocolVersion = DAEMON_PROTOCOL_INFO.version,
-	protectedAuthenticationToken?: string,
 ): void {
 	socket.write(
 		serializeJsonLine({
@@ -216,9 +240,6 @@ function writeHello(
 			schemaId: protocolVersion === DAEMON_PROTOCOL_INFO.version ? DAEMON_SCHEMA_ID : "legacy",
 			schemaRevision: protocolVersion === DAEMON_PROTOCOL_INFO.version ? DAEMON_SCHEMA_REVISION : 14,
 			supervisorGeneration: generation,
-			...(protectedAuthenticationToken
-				? { supervisorProtectedAuthenticationToken: protectedAuthenticationToken }
-				: {}),
 			serverCapabilities,
 		}),
 	);

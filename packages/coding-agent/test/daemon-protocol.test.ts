@@ -46,7 +46,7 @@ describe("daemon protocol helpers", () => {
 	});
 
 	it("requires compatibility metadata for the heartbeat protocol surface", () => {
-		expect(DAEMON_PROTOCOL_VERSION).toBe(8);
+		expect(DAEMON_PROTOCOL_VERSION).toBe(9);
 		expect(DAEMON_SCHEMA_ID).toContain(`protocol-${DAEMON_PROTOCOL_VERSION}`);
 		expect(DAEMON_COMMAND_COMPATIBILITY.heartbeats_list).toEqual({
 			minProtocol: 7,
@@ -71,7 +71,7 @@ describe("daemon protocol helpers", () => {
 
 	it("requires capability-gated authentication only for the public Windows supervisor", () => {
 		expect(DAEMON_COMMAND_COMPATIBILITY.daemon_auth).toEqual({
-			minProtocol: 8,
+			minProtocol: 9,
 			capability: "windows_pipe_auth",
 		});
 		expect(getDaemonSupervisorServerCapabilities("win32")).toEqual([

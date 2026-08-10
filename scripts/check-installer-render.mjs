@@ -319,6 +319,11 @@ function checkPowerShellInstaller(source) {
 	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
 	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
 	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
+	check(source.includes('$downloadBaseUri.Scheme -ne "https"'), "PowerShell installer must require HTTPS downloads");
+	check(
+		source.includes("PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS"),
+		"PowerShell installer must require an explicit opt-in for insecure development downloads",
+	);
 	check(source.includes("install --global"), "PowerShell installer must install the package globally with npm");
 	check(source.includes('else { "piloom" }'), "PowerShell installer must expose piloom as the default command");
 	check(source.includes("npm prefix --global"), "PowerShell installer must resolve npm's global command directory");

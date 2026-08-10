@@ -1048,7 +1048,6 @@ export class DaemonSupervisor {
 						supervisorPid: process.pid,
 						supervisorProcessStartId: this.ownership?.record.processStartId,
 						supervisorSocketPath: this.ownership?.record.socketPath,
-						supervisorProtectedAuthenticationToken: this.ownership?.record.protectedAuthenticationToken,
 						clientId: client.id,
 						serverCapabilities: getDaemonSupervisorServerCapabilities(),
 					});
@@ -1397,7 +1396,7 @@ export class DaemonSupervisor {
 
 	private handleWindowsClientAuthentication(client: DaemonSocketClient, line: string): void {
 		const result = verifyDaemonPublicAuthentication(line, this.ownership?.authenticationToken);
-		if (!result.authenticated) {
+		if (!result.authenticated || !result.serverProof) {
 			this.write(client, failure(result.id, "daemon_auth", "Daemon authentication failed"));
 			client.socket.end();
 			return;
@@ -1405,7 +1404,7 @@ export class DaemonSupervisor {
 
 		client.authenticated = true;
 		this.clearWindowsAuthenticationTimeout(client);
-		this.write(client, success(result.id, "daemon_auth"));
+		this.write(client, success(result.id, "daemon_auth", { proof: result.serverProof }));
 	}
 
 	private clearWindowsAuthenticationTimeout(client: DaemonSocketClient): void {
