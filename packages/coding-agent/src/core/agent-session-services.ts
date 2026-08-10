@@ -11,6 +11,7 @@ import type { AgentAutonomousConfig } from "./autonomous.js";
 import type { AgentRlmHeartbeatController } from "./cron-jobs.js";
 import { createHerdrAgentStateExtension } from "./extensions/builtin/herdr-agent-state.js";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.js";
+import type { LoadExtensionsResult } from "./extensions/types.js";
 import { McpManager } from "./mcp/mcp-manager.js";
 import { ModelRegistry } from "./model-registry.js";
 import { DefaultResourceLoader, type DefaultResourceLoaderOptions, type ResourceLoader } from "./resource-loader.js";
@@ -56,6 +57,8 @@ export interface CreateAgentSessionServicesOptions {
 	noBuiltinHerdrReporter?: boolean;
 	/** Explicit daemon-carried opt-out; cannot enable telemetry. */
 	telemetryDisabled?: true;
+	/** Resolve project trust after the global/CLI-only bootstrap pass. */
+	projectTrustResolver?: (input: { extensionsResult: LoadExtensionsResult }) => Promise<boolean>;
 }
 
 export interface AgentSessionCreationOptions {
@@ -180,7 +183,7 @@ export async function createAgentSessionServices(
 	const cwd = options.cwd;
 	const agentDir = options.agentDir ?? getAgentDir();
 	const authStorage = options.authStorage ?? AuthStorage.create(join(agentDir, "auth.json"));
-	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
+	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, join(agentDir, "models.json"));
 
 	// MCP integrations: registers OAuth providers and gates the built-in
@@ -212,7 +215,9 @@ export async function createAgentSessionServices(
 		settingsManager,
 		extraBuiltinSkillOverrides: () => mcpManager.getDisabledBuiltinSkillOverrides(),
 	});
-	await resourceLoader.reload();
+	await resourceLoader.reload(
+		options.projectTrustResolver ? { resolveProjectTrust: options.projectTrustResolver } : undefined,
+	);
 
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	if (

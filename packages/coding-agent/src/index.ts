@@ -78,6 +78,7 @@ export type {
 	ExtensionFactory,
 	ExtensionFlag,
 	ExtensionHandler,
+	ExtensionMode,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
@@ -91,6 +92,11 @@ export type {
 	LoadExtensionsResult,
 	MessageRenderer,
 	MessageRenderOptions,
+	ProjectTrustContext,
+	ProjectTrustEvent,
+	ProjectTrustEventDecision,
+	ProjectTrustEventResult,
+	ProjectTrustHandler,
 	ProviderConfig,
 	ProviderModelConfig,
 	RefineCompleteEvent,
@@ -264,6 +270,12 @@ export {
 	truncateTail,
 	withFileMutationQueue,
 } from "./core/tools/index.js";
+export {
+	hasProjectConfigDir,
+	hasProjectTrustInputs,
+	type ProjectTrustDecision,
+	ProjectTrustStore,
+} from "./core/trust-manager.js";
 // Main entry point
 export { type MainOptions, main } from "./main.js";
 export {

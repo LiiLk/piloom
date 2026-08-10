@@ -54,7 +54,8 @@ import {
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
-import type { ExtensionFactory } from "./core/extensions/types.js";
+import { emitProjectTrustEvent } from "./core/extensions/runner.js";
+import type { ExtensionFactory, LoadExtensionsResult, ProjectTrustContext } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
 import { installFileLogSink, setLogContext } from "./core/logging.js";
 import type { ModelRegistry } from "./core/model-registry.js";
@@ -72,6 +73,7 @@ import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { isTelemetryEnabled } from "./core/telemetry.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
+import { hasProjectTrustInputs, ProjectTrustStore } from "./core/trust-manager.js";
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
 import { isDaemonCatalogProcess, runDaemonCatalogProcess } from "./modes/daemon/daemon-catalog-process.js";
 import { deserializeDaemonError } from "./modes/daemon/daemon-errors.js";
@@ -663,6 +665,7 @@ function runtimeConfigFromArgs(
 		extensionFlagValues: parsed.unknownFlags.size > 0 ? Object.fromEntries(parsed.unknownFlags.entries()) : undefined,
 		executionMode: appMode === "daemon" ? undefined : appMode,
 		telemetryDisabled,
+		projectTrustOverride: parsed.projectTrustOverride,
 		// Serialized refine for print/json/rpc: the client's appMode is NOT
 		// "daemon" here — it's "print", "json", or "rpc". The daemon worker
 		// receives this flag via AgentSessionRuntimeConfig and uses it
@@ -723,6 +726,7 @@ async function prepareRuntimeServices(options: {
 	sessionManager: SessionManager;
 	extensionFactories?: ExtensionFactory[];
 	sessionOptionsOverride?: CreateAgentSessionOptions;
+	projectTrustResolver?: (input: { extensionsResult: LoadExtensionsResult }) => Promise<boolean>;
 }): Promise<PreparedRuntimeServices> {
 	const { config, sessionManager } = options;
 	const effectiveAgentDir = config.agentDir ?? options.agentDir;
@@ -733,6 +737,8 @@ async function prepareRuntimeServices(options: {
 		cwd: options.cwd,
 		agentDir: effectiveAgentDir,
 		authStorage,
+		settingsManager: SettingsManager.create(options.cwd, effectiveAgentDir, { projectTrusted: false }),
+		projectTrustResolver: options.projectTrustResolver,
 		extensionFlagValues: new Map(Object.entries(config.extensionFlagValues ?? {})),
 		// Subagents share the parent's Herdr pane; their own reporter would race
 		// the parent's and a subagent quit would release the still-active pane.
@@ -874,6 +880,95 @@ async function promptForMissingSessionCwd(
 		ui.setFocus(selector);
 		ui.start();
 	});
+}
+
+interface ProjectTrustPromptResult {
+	trusted: boolean;
+	remember: boolean;
+}
+
+const PROJECT_TRUST_OPTIONS = [
+	"Trust for this run",
+	"Trust and remember",
+	"Ignore for this run",
+	"Ignore and remember",
+] as const;
+
+async function promptForProjectTrust(settingsManager: SettingsManager, cwd: string): Promise<ProjectTrustPromptResult> {
+	initTheme(settingsManager.getTheme());
+	setKeybindings(KeybindingsManager.create());
+	return new Promise((resolve) => {
+		const ui = new TUI(new ProcessTerminal(), settingsManager.getShowHardwareCursor());
+		ui.setClearOnShrink(settingsManager.getClearOnShrink());
+		let settled = false;
+		const finish = (choice: string | undefined) => {
+			if (settled) return;
+			settled = true;
+			ui.stop();
+			const index = PROJECT_TRUST_OPTIONS.indexOf(choice as (typeof PROJECT_TRUST_OPTIONS)[number]);
+			resolve({ trusted: index === 0 || index === 1, remember: index === 1 || index === 3 });
+		};
+		const selector = new ExtensionSelectorComponent(
+			`Trust project folder?\n${cwd}\n\nThis allows PiLoom to read project instructions and settings, install missing project packages, and execute project extensions.`,
+			[...PROJECT_TRUST_OPTIONS],
+			finish,
+			() => finish(undefined),
+			{ tui: ui },
+		);
+		ui.addChild(selector);
+		ui.setFocus(selector);
+		ui.start();
+	});
+}
+
+async function resolveProjectTrustForRuntime(options: {
+	cwd: string;
+	agentDir: string;
+	appMode: AppMode;
+	trustOverride?: boolean;
+	settingsManager: SettingsManager;
+	trustStore: ProjectTrustStore;
+	extensionsResult: LoadExtensionsResult;
+}): Promise<boolean> {
+	if (options.trustOverride !== undefined) return options.trustOverride;
+	if (!hasProjectTrustInputs(options.cwd)) return true;
+	const extensionContext: ProjectTrustContext = {
+		cwd: options.cwd,
+		mode:
+			options.appMode === "interactive"
+				? "tui"
+				: options.appMode === "json"
+					? "json"
+					: options.appMode === "print"
+						? "print"
+						: "rpc",
+		hasUI: options.appMode === "interactive",
+		ui: {
+			select: async () => undefined,
+			confirm: async () => false,
+			input: async () => undefined,
+			notify: () => {},
+		},
+	};
+	const extensionDecision = await emitProjectTrustEvent(
+		options.extensionsResult,
+		{ type: "project_trust", cwd: options.cwd },
+		extensionContext,
+	);
+	for (const error of extensionDecision.errors) {
+		console.error(chalk.yellow(`Project trust extension ${error.extensionPath}: ${error.error}`));
+	}
+	if (extensionDecision.result && extensionDecision.result.trusted !== "undecided") {
+		const trusted = extensionDecision.result.trusted === "yes";
+		if (extensionDecision.result.remember) options.trustStore.set(options.cwd, trusted);
+		return trusted;
+	}
+	const saved = options.trustStore.get(options.cwd);
+	if (saved !== null) return saved;
+	if (options.appMode !== "interactive") return false;
+	const selected = await promptForProjectTrust(options.settingsManager, options.cwd);
+	if (selected.remember) options.trustStore.set(options.cwd, selected.trusted);
+	return selected.trusted;
 }
 
 function getDaemonSummaryActiveSessionId(summary: SessionSummary): string {
@@ -1135,7 +1230,29 @@ export async function main(args: string[], options?: MainOptions) {
 	time("runMigrations");
 
 	const agentDir = getAgentDir();
-	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
+	const trustStore = new ProjectTrustStore(agentDir);
+	const runtimeProjectTrust = new Map<string, boolean>();
+	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const makeProjectTrustResolver =
+		(runtimeCwd: string, runtimeMode: AppMode, trustOverride?: boolean) =>
+		async ({ extensionsResult }: { extensionsResult: LoadExtensionsResult }) => {
+			if (trustOverride !== undefined) return trustOverride;
+			const resolvedRuntimeCwd = resolve(runtimeCwd);
+			const trustKey = process.platform === "win32" ? resolvedRuntimeCwd.toLowerCase() : resolvedRuntimeCwd;
+			const cachedTrust = runtimeProjectTrust.get(trustKey);
+			if (cachedTrust !== undefined) return cachedTrust;
+			const trusted = await resolveProjectTrustForRuntime({
+				cwd: runtimeCwd,
+				agentDir,
+				appMode: runtimeMode,
+				trustOverride,
+				settingsManager: SettingsManager.create(runtimeCwd, agentDir, { projectTrusted: false }),
+				trustStore,
+				extensionsResult,
+			});
+			runtimeProjectTrust.set(trustKey, trusted);
+			return trusted;
+		};
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
 	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
 	if (startupBenchmark && appMode !== "interactive") {
@@ -1275,6 +1392,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager,
 			extensionFactories: options?.extensionFactories,
 			sessionOptionsOverride: runtimeSessionOptions,
+			projectTrustResolver: makeProjectTrustResolver(cwd, appMode, config.projectTrustOverride),
 		});
 		const { services, sessionOptions, diagnostics } = prepared;
 		const resolvedSessionOptions = resolveRuntimeSessionOptions(sessionOptions, runtimeSessionOptions);
@@ -1339,9 +1457,15 @@ export async function main(args: string[], options?: MainOptions) {
 			agentDir,
 			sessionManager,
 			extensionFactories: options?.extensionFactories,
+			projectTrustResolver: makeProjectTrustResolver(sessionManager.getCwd(), appMode, parsed.projectTrustOverride),
 		});
 		const { services, scopedModels } = prepared;
 		const { settingsManager } = services;
+		const shouldPropagateProjectTrust =
+			parsed.projectTrustOverride !== undefined || hasProjectTrustInputs(sessionManager.getCwd());
+		const daemonInteractiveSessionConfig = mergeAgentSessionRuntimeConfig(defaultSessionConfig, {
+			projectTrustOverride: shouldPropagateProjectTrust ? settingsManager.isProjectTrusted() : undefined,
+		});
 
 		const startupModel = await resolvePreparedStartupModel({ prepared, sessionManager });
 
@@ -1385,7 +1509,7 @@ export async function main(args: string[], options?: MainOptions) {
 		const launchAgentsView = async (initialSession?: SessionSummary, initialScopeKey?: AgentsViewScopeKey) => {
 			await runAgentsViewMode({
 				socketPath: daemonSocketPath,
-				config: defaultSessionConfig,
+				config: daemonInteractiveSessionConfig,
 				uiServices: daemonUiServices,
 				recoverDaemon: () => ensureInteractiveDaemonRunning(daemonSocketPath),
 				createUiServicesForSession: async (summary) => {
@@ -1401,6 +1525,11 @@ export async function main(args: string[], options?: MainOptions) {
 						agentDir,
 						sessionManager: attachedSessionManager,
 						extensionFactories: options?.extensionFactories,
+						projectTrustResolver: makeProjectTrustResolver(
+							attachedSessionManager.getCwd(),
+							appMode,
+							parsed.projectTrustOverride,
+						),
 					});
 					return createInteractiveModeUiServicesFromServices({
 						services: attachedPrepared.services,
@@ -1445,7 +1574,7 @@ export async function main(args: string[], options?: MainOptions) {
 			!activeDaemonSessionSummary && !getInteractiveDaemonSessionPath(parsed, sessionManager);
 		const { connection, summary } = await createDaemonClientConnection({
 			socketPath: daemonSocketPath,
-			config: defaultSessionConfig,
+			config: daemonInteractiveSessionConfig,
 			activeSessionId: activeDaemonSessionSummary
 				? getDaemonSummaryActiveSessionId(activeDaemonSessionSummary)
 				: undefined,

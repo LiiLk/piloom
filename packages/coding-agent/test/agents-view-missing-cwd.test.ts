@@ -11,6 +11,33 @@ import type { SessionSummary } from "../src/modes/daemon/daemon-session-list.js"
 import { assistantMsg, userMsg } from "./utilities.js";
 
 describe("agents view open with a missing session cwd", () => {
+	it("does not carry one-run project trust into another saved project", () => {
+		const root = mkdtempSync(join(tmpdir(), "agents-view-project-trust-"));
+		const launchCwd = join(root, "launch");
+		const savedCwd = join(root, "saved");
+		const agentDir = join(root, "agent");
+		try {
+			mkdirSync(launchCwd, { recursive: true });
+			mkdirSync(savedCwd, { recursive: true });
+			const resumeConfig = createAgentsViewResumeConfig(
+				{ cwd: launchCwd, agentDir, projectTrustOverride: true },
+				undefined,
+				savedCwd,
+			);
+
+			expect(resumeConfig.cwd).toBeUndefined();
+			expect(resumeConfig.projectTrustOverride).toBeUndefined();
+			const sameProjectConfig = createAgentsViewResumeConfig(
+				{ cwd: launchCwd, agentDir, projectTrustOverride: true },
+				undefined,
+				launchCwd,
+			);
+			expect(sameProjectConfig.projectTrustOverride).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("repros the failure and proves the override opens the session", async () => {
 		const root = mkdtempSync(join(tmpdir(), "agents-view-missing-cwd-"));
 		const launchCwd = join(root, "launch");

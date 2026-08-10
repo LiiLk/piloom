@@ -39,6 +39,8 @@ export interface AgentSessionRuntimeConfig {
 	executionMode?: AgentExecutionMode;
 	/** Opt-out-only policy carried across daemon process boundaries. */
 	telemetryDisabled?: true;
+	/** Per-run trust override; false always wins over remembered trust. */
+	projectTrustOverride?: boolean;
 	/**
 	 * Initial goal to seed when creating a new top-level session (rlmDepth 0).
 	 * Ignored for subagent sessions and when the branch already has a persisted
@@ -85,6 +87,7 @@ export function mergeAgentSessionRuntimeConfig(
 		serializedRefine: override.serializedRefine ?? base.serializedRefine,
 		executionMode: override.executionMode ?? base.executionMode,
 		telemetryDisabled: base.telemetryDisabled || override.telemetryDisabled ? true : undefined,
+		projectTrustOverride: override.projectTrustOverride ?? base.projectTrustOverride,
 		initialGoal: override.initialGoal ?? base.initialGoal,
 	};
 }
@@ -104,6 +107,7 @@ function cloneAgentSessionRuntimeConfig(config: AgentSessionRuntimeConfig): Agen
 		serializedRefine: config.serializedRefine,
 		executionMode: config.executionMode,
 		telemetryDisabled: config.telemetryDisabled,
+		projectTrustOverride: config.projectTrustOverride,
 		initialGoal: config.initialGoal ? { ...config.initialGoal } : undefined,
 	};
 }

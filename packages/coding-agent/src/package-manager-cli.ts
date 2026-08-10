@@ -48,6 +48,7 @@ import type { AgentSessionRuntimeMetadata } from "./core/agent-session-runtime.j
 import { type CustomMessage, isSessionSlashCommand } from "./core/messages.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
+import { hasProjectTrustInputs, ProjectTrustStore } from "./core/trust-manager.js";
 import { DaemonClient, type DaemonHello } from "./modes/daemon/daemon-client.js";
 import {
 	DAEMON_PROTOCOL_VERSION,
@@ -95,6 +96,7 @@ interface PackageCommandOptions {
 	invalidArgument?: string;
 	missingOptionValue?: string;
 	conflictingOptions?: string;
+	projectTrustOverride?: boolean;
 }
 
 function reportSettingsErrors(settingsManager: SettingsManager, context: string): void {
@@ -212,11 +214,21 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 	let restartCoordinator = false;
 	let restartStatusPath: string | undefined;
 	let restartOriginActiveSessionId: string | undefined;
+	let projectTrustOverride: boolean | undefined;
 
 	for (let index = 0; index < rest.length; index++) {
 		const arg = rest[index];
 		if (arg === "-h" || arg === "--help") {
 			help = true;
+			continue;
+		}
+
+		if (arg === "--approve" || arg === "-a") {
+			projectTrustOverride = true;
+			continue;
+		}
+		if (arg === "--no-approve" || arg === "-na") {
+			projectTrustOverride = false;
 			continue;
 		}
 
@@ -380,6 +392,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 		invalidArgument,
 		missingOptionValue,
 		conflictingOptions,
+		projectTrustOverride,
 	};
 }
 
@@ -1163,6 +1176,23 @@ function formatUnknownError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function parseProjectTrustOverride(args: readonly string[]): boolean | undefined {
+	let trustOverride: boolean | undefined;
+	for (const arg of args) {
+		if (arg === "--approve" || arg === "-a") {
+			trustOverride = true;
+		} else if (arg === "--no-approve" || arg === "-na") {
+			trustOverride = false;
+		}
+	}
+	return trustOverride;
+}
+
+function resolveProjectTrusted(cwd: string, agentDir: string, trustOverride: boolean | undefined): boolean {
+	if (trustOverride !== undefined) return trustOverride;
+	return !hasProjectTrustInputs(cwd) || new ProjectTrustStore(agentDir).get(cwd) === true;
+}
+
 function processIdentityFromDaemonHello(
 	hello: DaemonHello | undefined,
 ): DaemonUpdateRestartProcessIdentity | undefined {
@@ -1393,7 +1423,9 @@ export async function handleConfigCommand(args: string[]): Promise<boolean> {
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const settingsManager = SettingsManager.create(cwd, agentDir);
+	const settingsManager = SettingsManager.create(cwd, agentDir, {
+		projectTrusted: parseProjectTrustOverride(args) ?? true,
+	});
 	reportSettingsErrors(settingsManager, "config command");
 	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
 	const resolvedPaths = await packageManager.resolve();
@@ -1490,7 +1522,14 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const settingsManager = SettingsManager.create(cwd, agentDir);
+	const writesProjectPackageConfig = (options.command === "install" || options.command === "remove") && options.local;
+	const projectTrusted = resolveProjectTrusted(cwd, agentDir, options.projectTrustOverride);
+	if (!projectTrusted && writesProjectPackageConfig) {
+		console.error(chalk.red("Project is not trusted. Use --approve to modify local package config."));
+		process.exitCode = 1;
+		return true;
+	}
+	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 	reportSettingsErrors(settingsManager, "package command");
 	const selfUpdateNpmCommand = settingsManager.getGlobalSettings().npmCommand;
 

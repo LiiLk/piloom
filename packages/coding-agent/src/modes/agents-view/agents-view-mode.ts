@@ -196,12 +196,21 @@ export async function resolveAgentsViewSessionUiServices(
 export function createAgentsViewResumeConfig(
 	config: AgentSessionRuntimeConfig,
 	overrideCwd?: string,
+	sessionCwd?: string,
 ): AgentSessionRuntimeConfig {
 	const resumeConfig: AgentSessionRuntimeConfig = { ...config };
 	if (overrideCwd) {
 		resumeConfig.cwd = overrideCwd;
 	} else {
 		delete resumeConfig.cwd;
+	}
+	const runtimeCwd = overrideCwd ?? sessionCwd;
+	if (
+		config.cwd &&
+		runtimeCwd &&
+		canonicalizePath(resolvePath(config.cwd)) !== canonicalizePath(resolvePath(runtimeCwd))
+	) {
+		delete resumeConfig.projectTrustOverride;
 	}
 	return resumeConfig;
 }
@@ -380,7 +389,7 @@ async function resumeSavedAgentsViewSession(
 	const { overrideCwd, notice } = resolveAgentsViewOpenCwd(summary, config.cwd);
 	const response = await client.request({
 		type: "create",
-		config: createAgentsViewResumeConfig(config, overrideCwd),
+		config: createAgentsViewResumeConfig(config, overrideCwd, summary.cwd),
 		sessionPath: summary.sessionFile,
 	});
 	const createdSummary = expectSessionSummary(requireDaemonData(response));

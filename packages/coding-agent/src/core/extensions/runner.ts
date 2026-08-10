@@ -34,9 +34,13 @@ import type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
+	LoadExtensionsResult,
 	MessageEndEvent,
 	MessageEndEventResult,
 	MessageRenderer,
+	ProjectTrustContext,
+	ProjectTrustEvent,
+	ProjectTrustEventResult,
 	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
@@ -184,6 +188,30 @@ export async function emitSessionShutdownEvent(
 		return true;
 	}
 	return false;
+}
+
+export async function emitProjectTrustEvent(
+	extensionsResult: LoadExtensionsResult,
+	event: ProjectTrustEvent,
+	ctx: ProjectTrustContext,
+): Promise<{ result?: ProjectTrustEventResult; errors: ExtensionError[] }> {
+	const errors: ExtensionError[] = [];
+	for (const ext of extensionsResult.extensions) {
+		for (const handler of ext.handlers.get("project_trust") ?? []) {
+			try {
+				const result = (await handler(event, ctx)) as ProjectTrustEventResult;
+				if (result.trusted !== "undecided") return { result, errors };
+			} catch (error) {
+				errors.push({
+					extensionPath: ext.path,
+					event: event.type,
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+				});
+			}
+		}
+	}
+	return { errors };
 }
 
 const noOpUIContext: ExtensionUIContext = {
