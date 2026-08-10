@@ -24,6 +24,26 @@ function Write-Step([string]$Message) {
 	Write-Host "`n$Message" -ForegroundColor Cyan
 }
 
+function Invoke-SecureWebRequest([string]$Uri, [string]$OutFile = "") {
+	$parsedUri = $null
+	if (-not [Uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsedUri)) {
+		throw "Invalid download URL: $Uri"
+	}
+	if ($parsedUri.Scheme -ne "https" -and $env:PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS -ne "1") {
+		throw "The installer requires HTTPS downloads: $Uri"
+	}
+	$request = @{
+		Uri = $parsedUri
+		UseBasicParsing = $true
+		MaximumRedirection = 0
+		ErrorAction = "Stop"
+	}
+	if (-not [string]::IsNullOrWhiteSpace($OutFile)) {
+		$request.OutFile = $OutFile
+	}
+	return Invoke-WebRequest @request
+}
+
 function Normalize-Version([string]$Value) {
 	$normalized = $Value.Trim()
 	if ($normalized.StartsWith("v")) {
@@ -129,7 +149,7 @@ function Resolve-Version {
 
 	$channelUrl = "$baseUrl/$releaseChannel"
 	Write-Step "Resolving the $releaseChannel release"
-	$response = Invoke-WebRequest -Uri $channelUrl -UseBasicParsing
+	$response = Invoke-SecureWebRequest -Uri $channelUrl
 	return Normalize-Version $response.Content
 }
 
@@ -181,8 +201,8 @@ try {
 		$tarballPath = Join-Path $temporaryDirectory $tarballName
 
 		Write-Step "Downloading and verifying PiLoom v$version"
-		Invoke-WebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS" -OutFile $checksumPath -UseBasicParsing
-		Invoke-WebRequest -Uri $tarballUrl -OutFile $tarballPath -UseBasicParsing
+		Invoke-SecureWebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS" -OutFile $checksumPath | Out-Null
+		Invoke-SecureWebRequest -Uri $tarballUrl -OutFile $tarballPath | Out-Null
 		Verify-Checksum $checksumPath $tarballPath
 
 		$env:PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL = "1"

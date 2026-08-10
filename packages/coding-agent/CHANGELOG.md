@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added project trust prompts and `--approve`/`--no-approve` controls that gate project-local settings, resources, instructions, and extensions.
 - Changed first-run TUI branding to PiLoom and replaced the automatic Prime Intellect login prompt with generic model selection.
 - Changed the public CLI command and standalone executable to `piloom`, with Windows installer PATH verification.
 - Added Windows-first installation and release verification through a PowerShell installer, native CI coverage, and daemon/lifecycle checks.
@@ -10,8 +11,10 @@
 - Fixed Windows owned-session disposal during supervisor replacement and suppressed consoles for noninteractive process probes and supervisor test children.
 - Fixed remaining noninteractive Windows fallbacks opening consoles during config resolution, clipboard use, OAuth browser launch, and GitHub sharing.
 - Fixed Windows Git Bash child environments so shell utilities remain available to bash tools and command-backed credentials.
-- Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by a native `--version` smoke test.
-- Added fail-closed, mutually authenticated Windows daemon pipes and Job Object cleanup for frontend-owned worker process trees.
+- Added a Windows standalone ZIP release with its `koffi` native binding and SHA-256 sidecar, gated by an exact native `--version` smoke test; release jobs now publish only assets built for the requested version.
+- Added fail-closed, mutually authenticated per-user Windows daemon pipes, socket-bound client identities, and DPAPI-protected persisted worker credentials.
+- Added Job Object cleanup for frontend-owned worker process trees, explicit daemon replacement breakaway, and kernel teardown that waits for observed process exit before removing state.
+- Hardened the Windows installer to reject HTTP and redirected downloads instead of trusting hashes fetched through a downgraded transport.
 - Fixed Windows command shims preserving arguments through `cmd.exe` without allowing metacharacter injection.
 - Fixed custom uv install directories and session leases in case-sensitive Windows directories.
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).

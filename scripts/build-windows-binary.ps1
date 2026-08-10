@@ -15,6 +15,7 @@ function Invoke-Checked([string]$Command, [string[]]$Arguments) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 $packageDirectory = Join-Path $repoRoot "packages\coding-agent"
+$packageJsonPath = Join-Path $packageDirectory "package.json"
 $distDirectory = Join-Path $packageDirectory "dist"
 $stageDirectory = Join-Path $packageDirectory "binaries\windows-x64"
 $outputRoot = if ($OutputDirectory) {
@@ -24,9 +25,21 @@ $outputRoot = if ($OutputDirectory) {
 	}
 $archiveName = if ($Version) { "piloom-$Version-windows-x64.zip" } else { "piloom-windows-x64.zip" }
 $archivePath = Join-Path $outputRoot $archiveName
+$originalPackageJsonBytes = $null
 
 Push-Location $repoRoot
 try {
+	if ($Version) {
+		$originalPackageJsonBytes = [System.IO.File]::ReadAllBytes($packageJsonPath)
+		$versionedPackageJson = [System.IO.File]::ReadAllText($packageJsonPath) | ConvertFrom-Json
+		$versionedPackageJson.version = $Version
+		$utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+		[System.IO.File]::WriteAllText(
+			$packageJsonPath,
+			"$($versionedPackageJson | ConvertTo-Json -Depth 100)`n",
+			$utf8WithoutBom
+		)
+	}
 	foreach ($packageName in @("tui", "ai", "agent")) {
 		$workspacePackage = Join-Path $repoRoot "packages\$packageName"
 		Invoke-Checked "npm.cmd" @("--prefix", $workspacePackage, "run", "build")
@@ -88,7 +101,13 @@ try {
 		if (-not (Test-Path -LiteralPath $smokeBinary -PathType Leaf)) {
 			throw "The extracted Windows archive is missing the executable."
 		}
-		Invoke-Checked $smokeBinary @("--version")
+		$reportedVersion = (& $smokeBinary --version | Out-String).Trim()
+		if ($LASTEXITCODE -ne 0) {
+			throw "Windows binary --version failed with exit code $LASTEXITCODE."
+		}
+		if ($Version -and $reportedVersion -ne $Version) {
+			throw "Windows binary reported v$reportedVersion; expected v$Version."
+		}
 	} finally {
 		if (Test-Path -LiteralPath $smokeDirectory) {
 			Remove-Item -LiteralPath $smokeDirectory -Recurse -Force
@@ -99,5 +118,8 @@ try {
 	Set-Content -LiteralPath "$archivePath.sha256" -Value "$archiveHash  $archiveName" -Encoding ascii
 	Write-Host "Created $archivePath"
 } finally {
+	if ($null -ne $originalPackageJsonBytes) {
+		[System.IO.File]::WriteAllBytes($packageJsonPath, $originalPackageJsonBytes)
+	}
 	Pop-Location
 }

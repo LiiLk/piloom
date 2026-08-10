@@ -318,6 +318,7 @@ function checkPowerShellInstaller(source) {
 	check(source.includes('$unconfiguredDefaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_" + "CHANNEL__"'), "PowerShell installer is missing the release channel sentinel");
 	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
 	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
+	check(source.includes("MaximumRedirection = 0"), "PowerShell installer must reject download redirects");
 	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
 	check(source.includes('$downloadBaseUri.Scheme -ne "https"'), "PowerShell installer must require HTTPS downloads");
 	check(

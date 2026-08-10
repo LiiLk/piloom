@@ -233,6 +233,7 @@ jobs:
           npm.cmd run test:kernel
           npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/kernel-startup.test.ts test/owned-session-worker-process.test.ts test/package-self-update-daemon.test.ts
       - name: Test Windows portability paths
+        if: always()
         working-directory: packages/coding-agent
         run: |
           npx.cmd tsx ../../node_modules/vitest/dist/cli.js --run test/daemon-socket.test.ts test/daemon-launch.test.ts test/daemon-command.test.ts test/daemon-windows-auth.test.ts test/windows-job-object.test.ts test/piloom-command.test.ts test/exec.test.ts test/daemon-ps.test.ts test/child-process.test.ts test/shell.test.ts test/session-lease.test.ts test/tools-manager.test.ts test/auth-storage.test.ts test/telemetry.test.ts test/refinement.test.ts test/session-manager-flush.test.ts test/tools.test.ts
@@ -247,7 +248,11 @@ jobs:
     permissions:
       contents: read
     env:
+      BETA_VERSION: ${{ needs.release-context.outputs.beta_version }}
       BUILD_REF: ${{ needs.release-context.outputs.build_ref }}
+      PRODUCTION_VERSION: ${{ needs.release-context.outputs.production_version }}
+      PUBLISH_BETA: ${{ needs.release-context.outputs.publish_beta }}
+      PUBLISH_PRODUCTION: ${{ needs.release-context.outputs.publish_production }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -266,13 +271,15 @@ jobs:
       - name: Install dependencies
         run: npm.cmd ci
 
-      - name: Build and smoke-test Windows binary
+      - name: Build and smoke-test production Windows binary
+        if: env.PUBLISH_PRODUCTION == 'true'
         run: |
-          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build-windows-binary.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\windows-release"
-          $binary = Get-ChildItem -LiteralPath "$env:GITHUB_WORKSPACE\packages\coding-agent\binaries\windows-x64" -File | Where-Object { $_.Name -eq "piloom.exe" -or $_.Name -eq "piloom" } | Select-Object -First 1
-          if (-not $binary) { throw "Windows binary was not staged." }
-          & $binary.FullName --version
-          if ($LASTEXITCODE -ne 0) { throw "Windows binary --version smoke test failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build-windows-binary.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\windows-release" -Version "$env:PRODUCTION_VERSION"
+
+      - name: Build and smoke-test beta Windows binary
+        if: env.PUBLISH_BETA == 'true'
+        run: |
+          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build-windows-binary.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\windows-release" -Version "$env:BETA_VERSION"
 
       - name: Upload Windows binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -393,7 +400,7 @@ jobs:
             --content-type text/plain \
             --cache-control no-cache
 
-          for artifact in release-artifacts/windows/*.zip release-artifacts/windows/*.sha256; do
+          for artifact in "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"; do
             test -f "$artifact"
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/releases/v${PRODUCTION_VERSION}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
@@ -433,13 +440,13 @@ jobs:
           fi
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* release-artifacts/windows/* --clobber
+            gh release upload "$RELEASE_TAG" "$PRODUCTION_DIR"/* "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256" --clobber
           else
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
               "${target_args[@]}" \
               --notes-file /tmp/release-notes.md \
-              "$PRODUCTION_DIR"/* release-artifacts/windows/*
+              "$PRODUCTION_DIR"/* "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${PRODUCTION_VERSION}-windows-x64.zip.sha256"
           fi
 
       - name: Publish immutable beta artifacts to R2
@@ -463,7 +470,7 @@ jobs:
               --cache-control 'public, max-age=31536000, immutable'
           done
 
-          for artifact in release-artifacts/windows/*.zip release-artifacts/windows/*.sha256; do
+          for artifact in "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip" "release-artifacts/windows/piloom-${BETA_VERSION}-windows-x64.zip.sha256"; do
             test -f "$artifact"
             aws s3 cp "$artifact" "s3://${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$artifact")" \
               --endpoint-url "$R2_ENDPOINT_URL" \
