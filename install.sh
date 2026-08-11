@@ -2,12 +2,8 @@
 
 set -eu
 
-# Keep these sentinels split so release publishing only rewrites the configured
-# values below; local or unpublished copies still need unreplaced values to compare.
-prime_agent_unconfigured_base_url="__PRIME_AGENT_DOWNLOAD_BASE""_URL__"
+prime_agent_release_base_url="https://github.com/LiiLk/piloom"
 prime_agent_unconfigured_default_release_channel="__PRIME_AGENT_DEFAULT_RELEASE_""CHANNEL__"
-prime_agent_base_url="${PRIME_AGENT_DOWNLOAD_BASE_URL:-__PRIME_AGENT_DOWNLOAD_BASE_URL__}"
-prime_agent_base_url="${prime_agent_base_url%/}"
 prime_agent_default_release_channel="__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"
 if [ "$prime_agent_default_release_channel" = "$prime_agent_unconfigured_default_release_channel" ]; then
 	prime_agent_default_release_channel=stable
@@ -36,7 +32,7 @@ prime_agent_color_dim="${prime_agent_esc}[38;2;113;113;122m"
 prime_agent_color_primary="${prime_agent_esc}[38;2;127;91;213m"
 prime_agent_color_scan="${prime_agent_esc}[38;2;14;165;233m"
 prime_agent_color_warning="${prime_agent_esc}[38;2;245;158;11m"
-readonly prime_agent_unconfigured_base_url prime_agent_unconfigured_default_release_channel prime_agent_base_url prime_agent_default_release_channel prime_agent_release_channel prime_agent_package prime_agent_cmd prime_agent_release_signing_key_id prime_agent_release_signing_modulus prime_agent_release_signing_exponent prime_agent_esc prime_agent_original_path
+readonly prime_agent_release_base_url prime_agent_unconfigured_default_release_channel prime_agent_default_release_channel prime_agent_release_channel prime_agent_package prime_agent_cmd prime_agent_release_signing_key_id prime_agent_release_signing_modulus prime_agent_release_signing_exponent prime_agent_esc prime_agent_original_path
 readonly prime_agent_reset prime_agent_bold prime_agent_italic prime_agent_hide_cursor prime_agent_show_cursor prime_agent_home_cursor prime_agent_clear_screen prime_agent_clear_line
 readonly prime_agent_sync_start prime_agent_sync_end
 readonly prime_agent_color_text prime_agent_color_muted prime_agent_color_dim prime_agent_color_primary prime_agent_color_scan prime_agent_color_warning
@@ -62,12 +58,6 @@ prime_agent_screen_question=
 prime_agent_animation_frame=0
 
 main() {
-	if [ "$prime_agent_base_url" = "$prime_agent_unconfigured_base_url" ]; then
-		printf 'error: installer download URL is not configured.\n' >&2
-		printf 'Set PRIME_AGENT_DOWNLOAD_BASE_URL or use the installer published by the release workflow.\n' >&2
-		exit 1
-	fi
-
 	prime_agent_install_traps
 	prime_agent_init_screen
 	if [ "$prime_agent_screen_enabled" = 1 ]; then
@@ -101,9 +91,13 @@ main() {
 		fi
 	fi
 
+	case "${1:-}" in
+		stable|beta) release_channel="$1" ;;
+		*) release_channel="$prime_agent_release_channel" ;;
+	esac
 	version="$(resolve_prime_agent_version "$@")"
 	tarball_name="$prime_agent_package-$version.tgz"
-	tarball_url="$prime_agent_base_url/releases/v$version/$tarball_name"
+	tarball_url="$(prime_agent_release_asset_url "$version" "$tarball_name")"
 
 	confirm_install "$version" "$tarball_url"
 	confirm_kernel_runtime_setup
@@ -924,6 +918,77 @@ run_preflight_checks() {
 	return "$status"
 }
 
+prime_agent_is_trusted_release_url() {
+	case "$1" in
+		https://github.com/LiiLk/piloom/releases/*|https://release-assets.githubusercontent.com/*|https://objects.githubusercontent.com/*)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+prime_agent_download_release_asset() {
+	url="$1"
+	output_path="$2"
+	if ! prime_agent_is_trusted_release_url "$url"; then
+		printf 'error: release URL is outside the GitHub HTTPS trust policy: %s\n' "$url" >&2
+		exit 1
+	fi
+
+	redirect_count=0
+	while :; do
+		header_dir=$(create_temp_dir)
+		header_path="$header_dir/headers"
+		curl_status=0
+		curl -fsS -D "$header_path" --max-redirs 0 "$url" -o "$output_path" || curl_status=$?
+
+		status_line=$(sed -n '1p' "$header_path" 2>/dev/null || true)
+		status_code=$(printf '%s\n' "$status_line" | awk '{ print $2 }')
+		case "$status_code" in
+			2[0-9][0-9])
+				rm -rf "$header_dir"
+				if [ "$curl_status" -eq 0 ]; then
+					return 0
+				fi
+				return 1
+				;;
+		esac
+		case "$status_code" in
+			301|302|303|307|308) ;;
+			*)
+				rm -rf "$header_dir"
+				return 1
+				;;
+		esac
+
+		if [ "$redirect_count" -ge 5 ]; then
+			rm -rf "$header_dir"
+			printf 'error: too many redirects while downloading a PiLoom release asset.\n' >&2
+			exit 1
+		fi
+		location=$(awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' "$header_path")
+		rm -rf "$header_dir"
+		if [ -z "$location" ] || ! prime_agent_is_trusted_release_url "$location"; then
+			printf 'error: release redirect is outside the GitHub HTTPS trust policy: %s\n' "${location:-<missing>}" >&2
+			exit 1
+		fi
+		url="$location"
+		redirect_count=$((redirect_count + 1))
+	done
+}
+
+prime_agent_release_asset_url() {
+	version="$1"
+	file_name="$2"
+	if [ "$release_channel" = beta ]; then
+		printf '%s/releases/download/beta/%s' "$prime_agent_release_base_url" "$file_name"
+	else
+		printf '%s/releases/download/v%s/%s' "$prime_agent_release_base_url" "$version" "$file_name"
+	fi
+}
+
 resolve_prime_agent_version() {
 	if [ "${1:-}" ]; then
 		case "$1" in
@@ -961,18 +1026,26 @@ resolve_prime_agent_version() {
 		"Resolving latest release" \
 		"Resolving latest release" \
 		"Checking the $release_channel release channel." \
-		curl -fsSL "$prime_agent_base_url/$release_channel" -o "$channel_path"; then
+		prime_agent_download_release_asset "$(prime_agent_channel_url "$release_channel")" "$channel_path"; then
 		rm -rf "$channel_dir"
-		printf 'error: could not resolve latest PiLoom version from %s/%s\n' "$prime_agent_base_url" "$release_channel" >&2
+		printf 'error: could not resolve latest PiLoom version from GitHub Releases (%s)\n' "$release_channel" >&2
 		exit 1
 	fi
 	channel_version="$(tr -d '[:space:]' <"$channel_path")"
 	rm -rf "$channel_dir"
 	if [ -z "$channel_version" ]; then
-		printf 'error: could not resolve latest PiLoom version from %s/%s\n' "$prime_agent_base_url" "$release_channel" >&2
+		printf 'error: could not resolve latest PiLoom version from GitHub Releases (%s)\n' "$release_channel" >&2
 		exit 1
 	fi
 	normalize_version "$channel_version"
+}
+
+prime_agent_channel_url() {
+	case "$1" in
+		stable) printf '%s/releases/latest/download/stable' "$prime_agent_release_base_url" ;;
+		beta) printf '%s/releases/download/beta/beta' "$prime_agent_release_base_url" ;;
+		*) return 1 ;;
+	esac
 }
 
 normalize_version() {
@@ -1460,7 +1533,7 @@ download_prime_agent_package() {
 	tarball_path="$3"
 	download_dir=$(dirname "$tarball_path")
 	tarball_name=$(basename "$tarball_path")
-	checksums_url="$prime_agent_base_url/releases/v$version/SHA256SUMS"
+	checksums_url="$(prime_agent_release_asset_url "$version" "SHA256SUMS")"
 	checksums_path="$download_dir/SHA256SUMS"
 	signature_url="$checksums_url.sig"
 	signature_path="$checksums_path.sig"
@@ -1474,23 +1547,23 @@ download_prime_agent_package() {
 		"Downloading checksums" \
 		"Downloading release checksums" \
 		"PiLoom v$version" \
-		curl -fsSL "$checksums_url" -o "$checksums_path"
+		prime_agent_download_release_asset "$checksums_url" "$checksums_path"
 	prime_agent_run_quiet_with_animation \
 		"Downloading release signature" \
 		"Downloading signed release metadata" \
 		"PiLoom v$version" \
-		curl -fsSL "$signature_url" -o "$signature_path"
+		prime_agent_download_release_asset "$signature_url" "$signature_path"
 	prime_agent_run_quiet_with_animation \
 		"Verifying release signature" \
 		"Authenticating release checksums" \
 		"PiLoom v$version" \
-		verify_prime_agent_release_signature "$checksums_path" "$signature_path" "$version" "$prime_agent_release_channel"
+		verify_prime_agent_release_signature "$checksums_path" "$signature_path" "$version" "$release_channel"
 
 	prime_agent_run_quiet_with_animation \
 		"Downloading PiLoom" \
 		"Downloading PiLoom v$version" \
 		"Fetching the verified package." \
-		curl -fsSL "$tarball_url" -o "$tarball_path"
+		prime_agent_download_release_asset "$tarball_url" "$tarball_path"
 
 	verify_prime_agent_package_checksum "$checksums_path" "$tarball_path"
 }

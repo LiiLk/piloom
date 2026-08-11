@@ -17,6 +17,7 @@
 - Fixed daemon catalog shutdown waiting for its subprocess to exit, preventing Windows ACP cleanup from leaving locked project directories.
 - Hardened the Windows installer to reject HTTP and redirected downloads instead of trusting hashes fetched through a downgraded transport.
 - Added channel- and version-bound signed release manifests plus GitHub build-provenance attestations, with protected release approval and installers rejecting unsigned, substituted, or tampered releases.
+- Changed stable and beta distribution to GitHub Releases-only assets, with immutable stable tags, recoverable beta cutovers, signed self-updates installed from verified local tarballs, and authenticated bundled workspace dependencies.
 - Fixed Windows command shims preserving arguments through `cmd.exe` without allowing metacharacter injection.
 - Fixed custom uv install directories and session leases in case-sensitive Windows directories.
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).
