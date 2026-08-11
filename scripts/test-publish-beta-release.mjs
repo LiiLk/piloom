@@ -154,6 +154,20 @@ if (refMatch) {
   process.exit(0);
 }
 
+// Creating a draft returns the release, and creates no git tag: a draft is not
+// associated with one until it is published.
+if (path === "releases" && method === "POST") {
+  const created = {
+    id: String(state.nextId++), tagName: fields.tag_name, isDraft: fields.draft === "true",
+    isPrerelease: fields.prerelease === "true", name: fields.name || fields.tag_name,
+    body: fields.body ?? "", targetCommitish: fields.target_commitish, assets: {},
+  };
+  state.releases[created.tagName] = created;
+  save();
+  if (args.includes("--jq")) process.stdout.write(created.id + "\\n"); else printJson(releaseJson(created));
+  process.exit(0);
+}
+
 // A draft release has no git tag yet, so GitHub cannot resolve it by tag name
 // and answers 404. Callers have to fall back to the release list, which does
 // include drafts.
