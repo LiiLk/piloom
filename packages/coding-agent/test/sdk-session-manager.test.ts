@@ -63,7 +63,8 @@ describe("createAgentSession session manager defaults", () => {
 		session.dispose();
 	});
 
-	it("derives cwd from an explicit sessionManager when cwd is omitted", async () => {
+	// Runs a cell through a real IPython kernel, unlike its two siblings here.
+	it("derives cwd from an explicit sessionManager when cwd is omitted", { tags: ["kernel-heavy"] }, async () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
