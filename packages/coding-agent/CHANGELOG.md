@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- Fixed `npm install --global` of the release tarball leaving `koffi`, `chalk`, `marked`, `typebox`, and `undici` unextracted: bundled workspace packages no longer declare their own dependencies, so npm stops treating them as part of the bundle.
-- Changed the install-time warm-up of the search tools and the IPython runtime to warn instead of failing the installation, since both are bootstrapped again on first use.
 - Added project trust prompts and `--approve`/`--no-approve` controls that gate project-local settings, resources, instructions, and extensions.
 - Changed first-run TUI branding to PiLoom and replaced the automatic Prime Intellect login prompt with generic model selection.
 - Changed the public CLI command and standalone executable to `piloom`, with Windows installer PATH verification.
@@ -25,6 +23,11 @@
 - Added privacy-safe pseudonymous product analytics for onboarding, command use, execution modes, run outcomes, TTFT, latency, usage, tools, retries, and compactions, with disclosure and opt-out controls ([ENG-4682](https://linear.app/primeintellect/issue/ENG-4682/add-privacy-safe-posthog-analytics-to-prime-agent)).
 - Changed sent agent messages in the IPython cell UI to show only the message text with a `╰─` gutter when expanded, matching received messages, and hid the raw `agent_message.send` receipt dictionary.
 - Fixed Homebrew installs attempting to self-update their versioned Cellar keg instead of directing users to `brew upgrade prime-agent` ([#844](https://github.com/PrimeIntellect-ai/prime-agent/issues/844))
+
+## [0.7.4] - 2026-08-11
+
+- Fixed `npm install --global` of the release tarball leaving `koffi`, `chalk`, `marked`, `typebox`, and `undici` unextracted: bundled workspace packages no longer declare their own dependencies, so npm stops treating them as part of the bundle.
+- Changed the install-time warm-up of the search tools and the IPython runtime to warn instead of failing the installation, since both are bootstrapped again on first use.
 
 ## [0.7.3] - 2026-08-11
 
