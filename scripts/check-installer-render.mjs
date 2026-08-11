@@ -490,6 +490,7 @@ function checkPowerShellInstaller(source) {
 	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
 	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
 	check(source.includes("MaximumRedirection = 0"), "PowerShell installer must reject download redirects");
+	check(source.includes("Assert-TrustedReleaseBaseUri"), "PowerShell installer must validate its exact GitHub release base URL");
 	check(source.includes("Assert-TrustedReleaseUri"), "PowerShell installer must enforce its GitHub release redirect policy");
 	check(source.includes("release-assets.githubusercontent.com"), "PowerShell installer must allow GitHub's release asset host");
 	check(source.includes("Get-FileHash"), "PowerShell installer must verify SHA-256 checksums");
@@ -544,8 +545,26 @@ $fixtureDirectory = '${quotePowerShell(fixtureDirectory)}'
 $checksumPath = Join-Path $fixtureDirectory 'SHA256SUMS'
 $signaturePath = Join-Path $fixtureDirectory 'SHA256SUMS.sig'
 Verify-ReleaseSignature $checksumPath $signaturePath '0.0.0' 'stable'
+Assert-TrustedReleaseBaseUri ([Uri]'https://github.com/LiiLk/piloom')
+Assert-TrustedReleaseBaseUri ([Uri]'https://github.com/LiiLk/piloom/')
 Assert-TrustedReleaseUri ([Uri]'https://github.com/LiiLk/piloom/releases/download/v0.0.0/SHA256SUMS')
 Assert-TrustedReleaseUri ([Uri]'https://release-assets.githubusercontent.com/github-production-release-asset/example')
+function Assert-BaseUriRejected([string]$Uri, [string]$Label) {
+	try {
+		Assert-TrustedReleaseBaseUri ([Uri]$Uri)
+	} catch {
+		return
+	}
+	throw "Release base URL policy accepted $Label."
+}
+Assert-BaseUriRejected 'http://github.com/LiiLk/piloom' 'an HTTP base URL'
+Assert-BaseUriRejected 'https://evil.example/LiiLk/piloom' 'an untrusted base host'
+Assert-BaseUriRejected 'https://github.com:444/LiiLk/piloom' 'a non-default base port'
+Assert-BaseUriRejected 'https://user@github.com/LiiLk/piloom' 'base URL userinfo'
+Assert-BaseUriRejected 'https://github.com/LiiLk/piloom/releases' 'a broader release path'
+Assert-BaseUriRejected 'https://github.com/LiiLk/piloom?download=1' 'a base URL query'
+Assert-BaseUriRejected 'https://github.com/LiiLk/piloom#release' 'a base URL fragment'
+Assert-BaseUriRejected 'https://github.com/liilk/piloom' 'a differently cased repository path'
 function Assert-UriRejected([string]$Uri, [string]$Label) {
 	try {
 		Assert-TrustedReleaseUri ([Uri]$Uri)

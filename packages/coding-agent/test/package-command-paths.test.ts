@@ -20,6 +20,16 @@ import {
 } from "../src/config.js";
 import { main } from "../src/main.js";
 
+function nextPatchVersion(version: string): string {
+	const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+	if (!match) {
+		throw new Error(`Expected a semantic application version, received: ${version}`);
+	}
+	return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+}
+
+const NEWER_VERSION = nextPatchVersion(VERSION);
+
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
 		delete process.env[name];
@@ -222,8 +232,8 @@ else { const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.
 			vi.fn(async () =>
 				Response.json({
 					package: "prime-agent",
-					tarball: "releases/download/v0.7.2/prime-agent-0.7.2.tgz",
-					version: "0.7.2",
+					tarball: `releases/download/v${NEWER_VERSION}/prime-agent-${NEWER_VERSION}.tgz`,
+					version: NEWER_VERSION,
 				}),
 			),
 		);
@@ -241,7 +251,7 @@ else { const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.
 			const recordedCalls = JSON.parse(readFileSync(recordPath, "utf-8")) as string[][];
 			const installCall = recordedCalls.find((args) => args.includes("install"));
 			expect(installCall).toBeDefined();
-			const localTarball = installCall?.find((arg) => arg.includes("prime-agent-0.7.2.tgz"));
+			const localTarball = installCall?.find((arg) => arg.includes(`prime-agent-${NEWER_VERSION}.tgz`));
 			expect(localTarball).toBeDefined();
 			expect(localTarball).not.toMatch(/^https?:/);
 			expect(installCall).toContain(globalPrefix);
@@ -325,8 +335,8 @@ else { const records=fs.existsSync(${JSON.stringify(recordPath)})?JSON.parse(fs.
 			vi.fn(async () =>
 				Response.json({
 					package: "prime-agent",
-					tarball: "releases/download/v0.7.2/prime-agent-0.7.2.tgz",
-					version: "0.7.2",
+					tarball: `releases/download/v${NEWER_VERSION}/prime-agent-${NEWER_VERSION}.tgz`,
+					version: NEWER_VERSION,
 				}),
 			),
 		);

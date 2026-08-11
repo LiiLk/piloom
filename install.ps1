@@ -24,6 +24,21 @@ function Write-Step([string]$Message) {
 	Write-Host "`n$Message" -ForegroundColor Cyan
 }
 
+function Assert-TrustedReleaseBaseUri([Uri]$ParsedUri) {
+	if ($ParsedUri.Scheme -ne "https" -or $ParsedUri.UserInfo -or ($ParsedUri.Port -ne -1 -and $ParsedUri.Port -ne 443)) {
+		throw "The installer requires the official PiLoom HTTPS release base URL: $($ParsedUri.AbsoluteUri)"
+	}
+	$trustedPaths = @("/LiiLk/piloom", "/LiiLk/piloom/")
+	if (
+		$ParsedUri.Host -ne "github.com" -or
+		$ParsedUri.AbsolutePath -cnotin $trustedPaths -or
+		$ParsedUri.Query -or
+		$ParsedUri.Fragment
+	) {
+		throw "The installer only trusts the official PiLoom release base URL: https://github.com/LiiLk/piloom"
+	}
+}
+
 function Assert-TrustedReleaseUri([Uri]$ParsedUri) {
 	if ($ParsedUri.Scheme -ne "https" -or $ParsedUri.UserInfo -or ($ParsedUri.Port -ne -1 -and $ParsedUri.Port -ne 443)) {
 		throw "The installer requires trusted HTTPS GitHub release URLs: $($ParsedUri.AbsoluteUri)"
@@ -296,7 +311,7 @@ $downloadBaseUri = $null
 if (-not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$downloadBaseUri)) {
 	Fail "The installer download URL is invalid: $baseUrl"
 }
-try { Assert-TrustedReleaseUri $downloadBaseUri } catch { Fail $_.Exception.Message }
+try { Assert-TrustedReleaseBaseUri $downloadBaseUri } catch { Fail $_.Exception.Message }
 
 try {
 	Assert-NodeVersion
