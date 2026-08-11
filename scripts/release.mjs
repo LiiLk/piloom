@@ -11,9 +11,13 @@
  * 2. Bump version via npm run version:xxx or set an explicit version
  * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
  * 4. Commit and tag
- * 5. Publish to npm
- * 6. Add new [Unreleased] section to changelogs
- * 7. Commit
+ * 5. Add new [Unreleased] section to changelogs
+ * 6. Commit
+ * 7. Push main and the tag
+ *
+ * Artifacts are built, signed and published by the Release PiLoom workflow when
+ * the tag lands. This script never publishes anything itself: PiLoom is
+ * distributed through GitHub Releases, not the npm registry.
  */
 
 import { execSync } from "child_process";
@@ -171,26 +175,22 @@ run(`git commit -m "Release v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 5. Publish
-console.log("Publishing to npm...");
-run("npm run publish");
-console.log();
-
-// 6. Add new [Unreleased] sections
+// 5. Add new [Unreleased] sections
 console.log("Adding [Unreleased] sections for next cycle...");
 addUnreleasedSection();
 console.log();
 
-// 7. Commit
+// 6. Commit
 console.log("Committing changelog updates...");
 stageChangedFiles();
 run(`git commit -m "Add [Unreleased] section for next cycle"`);
 console.log();
 
-// 8. Push
+// 7. Push. The tag is what makes the Release PiLoom workflow publish the
+// signed artifacts to GitHub Releases.
 console.log("Pushing to remote...");
 run("git push origin main");
 run(`git push origin v${version}`);
 console.log();
 
-console.log(`=== Released v${version} ===`);
+console.log(`=== Tagged v${version}; the release workflow publishes the artifacts ===`);
