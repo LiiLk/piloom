@@ -67,7 +67,9 @@ function main() {
 		// not download the search tools or the IPython runtime here.
 		runNpm(["install", "--global", "--prefix", prefix, "--no-fund", "--no-audit", "--loglevel=error", tarball], root);
 
-		const packageDir = join(prefix, "node_modules", packageName);
+		// Global packages live under <prefix>/lib/node_modules on POSIX and
+		// <prefix>/node_modules on Windows, so ask npm instead of guessing.
+		const packageDir = join(runNpm(["root", "--global", "--prefix", prefix], root), packageName);
 		const nodeModulesDir = join(packageDir, "node_modules");
 		if (!existsSync(nodeModulesDir)) throw new Error(`${packageName} was installed without dependencies.`);
 
