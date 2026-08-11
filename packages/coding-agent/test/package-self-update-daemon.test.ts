@@ -21,6 +21,15 @@ import {
 import type { AgentSessionRuntimeMetadata } from "../src/core/agent-session-runtime.js";
 import { DAEMON_PROTOCOL_VERSION, DAEMON_SCHEMA_ID } from "../src/modes/daemon/daemon-protocol.js";
 import type * as DaemonSocketModule from "../src/modes/daemon/daemon-socket.js";
+
+const { mockedDownloadVerifiedReleaseTarball } = vi.hoisted(() => ({
+	mockedDownloadVerifiedReleaseTarball: vi.fn(),
+}));
+vi.mock("../src/utils/version-check.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/utils/version-check.js")>()),
+	downloadVerifiedReleaseTarball: mockedDownloadVerifiedReleaseTarball,
+}));
+
 import {
 	handlePackageCommand,
 	prepareDaemonUpdateRestart,
@@ -525,13 +534,23 @@ describe("self-update daemon restart", () => {
 			configurable: true,
 		});
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ npmCommand: ["npm"] }, null, 2));
+		mockedDownloadVerifiedReleaseTarball.mockImplementation(async (_release, destinationPath) => {
+			writeFileSync(destinationPath, "verified tarball");
+		});
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ version: "999.0.0" })),
+			vi.fn(async () =>
+				Response.json({
+					package: "prime-agent",
+					tarball: "releases/download/v999.0.0/prime-agent-999.0.0.tgz",
+					version: "999.0.0",
+				}),
+			),
 		);
 	});
 
 	afterEach(() => {
+		mockedDownloadVerifiedReleaseTarball.mockReset();
 		vi.unstubAllGlobals();
 		process.chdir(originalCwd);
 		process.exitCode = originalExitCode;
@@ -574,7 +593,13 @@ describe("self-update daemon restart", () => {
 		process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] = "1";
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ version: "0.2.6" })),
+			vi.fn(async () =>
+				Response.json({
+					package: "prime-agent",
+					tarball: `releases/download/v${VERSION}/prime-agent-${VERSION}.tgz`,
+					version: VERSION,
+				}),
+			),
 		);
 
 		await expect(handlePackageCommand(["update", "--self"])).resolves.toBe(true);

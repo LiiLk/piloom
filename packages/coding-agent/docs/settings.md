@@ -48,7 +48,7 @@ Edit directly or use `/settings` for common options.
 
 ### Update Checks
 
-Stable builds fetch the release manifest at `https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/latest.json`. Beta builds fetch `beta.json` and continue following beta updates. Override the base URL with `PRIME_AGENT_DOWNLOAD_BASE_URL`.
+Stable builds fetch `latest.json` from the latest GitHub Release at `https://github.com/LiiLk/piloom/releases/latest/download/latest.json`. Beta builds fetch `beta.json` from the dedicated `beta` prerelease tag and continue following beta updates. Self-update downloads the signed checksum metadata first, authenticates its channel and version, verifies the archive hash, and invokes npm only with the verified local tarball.
 
 Set `PI_SKIP_VERSION_CHECK=1` to disable the Prime Agent version update check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including update checks and package update checks.
 
@@ -58,11 +58,11 @@ The stable `latest.json` and beta `beta.json` manifests use the same JSON shape:
 {
   "version": "0.73.1",
   "package": "prime-agent",
-  "tarball": "releases/v0.73.1/prime-agent-0.73.1.tgz"
+  "tarball": "releases/download/v0.73.1/prime-agent-0.73.1.tgz"
 }
 ```
 
-`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, Prime Agent installs that tarball instead of the package name. Relative tarball paths resolve against `PRIME_AGENT_DOWNLOAD_BASE_URL`.
+`version` is required. `package` is optional and may also be named `packageName`; it defaults to the current package name. `tarball` is optional; when present, Prime Agent installs that GitHub Release asset instead of the package name. Relative tarball paths resolve against the PiLoom GitHub repository release base.
 
 ### Pseudonymous usage analytics
 

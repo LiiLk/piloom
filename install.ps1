@@ -1,12 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$unconfiguredBaseUrl = "__PRIME_AGENT_DOWNLOAD_BASE_URL__"
+$baseUrl = "https://github.com/LiiLk/piloom"
 $unconfiguredDefaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_" + "CHANNEL__"
-$baseUrl = if ($env:PRIME_AGENT_DOWNLOAD_BASE_URL) {
-	$env:PRIME_AGENT_DOWNLOAD_BASE_URL.TrimEnd("/")
-} else {
-	$unconfiguredBaseUrl
-}
 $defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"
 if ($defaultChannel -eq $unconfiguredDefaultChannel) {
 	$defaultChannel = "stable"
@@ -29,24 +24,67 @@ function Write-Step([string]$Message) {
 	Write-Host "`n$Message" -ForegroundColor Cyan
 }
 
+function Assert-TrustedReleaseUri([Uri]$ParsedUri) {
+	if ($ParsedUri.Scheme -ne "https" -or $ParsedUri.UserInfo -or ($ParsedUri.Port -ne -1 -and $ParsedUri.Port -ne 443)) {
+		throw "The installer requires trusted HTTPS GitHub release URLs: $($ParsedUri.AbsoluteUri)"
+	}
+	if ($ParsedUri.Host -eq "github.com") {
+		if (-not $ParsedUri.AbsolutePath.StartsWith("/LiiLk/piloom/releases/", [System.StringComparison]::Ordinal)) {
+			throw "The installer only trusts PiLoom release URLs on github.com: $($ParsedUri.AbsoluteUri)"
+		}
+		return
+	}
+	if ($ParsedUri.Host -notin @("release-assets.githubusercontent.com", "objects.githubusercontent.com")) {
+		throw "The installer rejected an untrusted release redirect: $($ParsedUri.AbsoluteUri)"
+	}
+}
+
 function Invoke-SecureWebRequest([string]$Uri, [string]$OutFile = "") {
 	$parsedUri = $null
 	if (-not [Uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsedUri)) {
 		throw "Invalid download URL: $Uri"
 	}
-	if ($parsedUri.Scheme -ne "https" -and $env:PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS -ne "1") {
-		throw "The installer requires HTTPS downloads: $Uri"
+	Assert-TrustedReleaseUri $parsedUri
+	for ($redirectCount = 0; ; $redirectCount++) {
+		$request = @{
+			Uri = $parsedUri
+			UseBasicParsing = $true
+			MaximumRedirection = 0
+			ErrorAction = "Stop"
+		}
+		if (-not [string]::IsNullOrWhiteSpace($OutFile)) {
+			$request.OutFile = $OutFile
+		}
+		try {
+			$response = Invoke-WebRequest @request
+			$statusCode = [int]$response.StatusCode
+			if ($statusCode -lt 300 -or $statusCode -ge 400) {
+				return $response
+			}
+		} catch {
+			$response = $_.Exception.Response
+			if (-not $response) {
+				throw
+			}
+		}
+		$statusCode = [int]$response.StatusCode
+		if ($statusCode -lt 300 -or $statusCode -ge 400) {
+			throw "The GitHub release request failed with HTTP status $statusCode."
+		}
+		if ($redirectCount -ge 5) {
+			throw "Too many redirects while downloading a PiLoom release asset."
+		}
+		$location = $response.Headers["Location"]
+		if ([string]::IsNullOrWhiteSpace($location)) {
+			throw "PiLoom release redirect did not include a Location header."
+		}
+		$nextUri = $null
+		if (-not [Uri]::TryCreate($parsedUri, $location.Trim(), [ref]$nextUri)) {
+			throw "Invalid PiLoom release redirect: $location"
+		}
+		Assert-TrustedReleaseUri $nextUri
+		$parsedUri = $nextUri
 	}
-	$request = @{
-		Uri = $parsedUri
-		UseBasicParsing = $true
-		MaximumRedirection = 0
-		ErrorAction = "Stop"
-	}
-	if (-not [string]::IsNullOrWhiteSpace($OutFile)) {
-		$request.OutFile = $OutFile
-	}
-	return Invoke-WebRequest @request
 }
 
 function Verify-ReleaseSignature([string]$ChecksumPath, [string]$SignaturePath, [string]$ExpectedVersion, [string]$ExpectedChannel) {
@@ -220,10 +258,19 @@ function Resolve-Version {
 		throw "Invalid PiLoom release channel: $releaseChannel"
 	}
 
-	$channelUrl = "$baseUrl/$releaseChannel"
+	$channelUrl = if ($releaseChannel -eq "beta") {
+		"$baseUrl/releases/download/beta/beta"
+	} else {
+		"$baseUrl/releases/latest/download/stable"
+	}
 	Write-Step "Resolving the $releaseChannel release"
 	$response = Invoke-SecureWebRequest -Uri $channelUrl
 	return Normalize-Version $response.Content
+}
+
+function Get-ReleaseAssetUrl([string]$Version, [string]$FileName) {
+	$releaseTag = if ($releaseChannel -eq "beta") { "beta" } else { "v$Version" }
+	return "$baseUrl/releases/download/$releaseTag/$FileName"
 }
 
 function Get-Checksum([string]$ChecksumPath, [string]$FileName) {
@@ -245,22 +292,17 @@ function Verify-Checksum([string]$ChecksumPath, [string]$TarballPath) {
 	}
 }
 
-if ($baseUrl -eq $unconfiguredBaseUrl) {
-	Fail "The installer download URL is not configured. Set PRIME_AGENT_DOWNLOAD_BASE_URL or use the installer published by the release workflow."
-}
 $downloadBaseUri = $null
 if (-not [Uri]::TryCreate($baseUrl, [UriKind]::Absolute, [ref]$downloadBaseUri)) {
 	Fail "The installer download URL is invalid: $baseUrl"
 }
-if ($downloadBaseUri.Scheme -ne "https" -and $env:PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS -ne "1") {
-	Fail "The installer requires HTTPS downloads. Set PRIME_AGENT_ALLOW_INSECURE_DOWNLOADS=1 only for local development."
-}
+try { Assert-TrustedReleaseUri $downloadBaseUri } catch { Fail $_.Exception.Message }
 
 try {
 	Assert-NodeVersion
 	$version = Resolve-Version
 	$tarballName = "$packageName-$version.tgz"
-	$tarballUrl = "$baseUrl/releases/v$version/$tarballName"
+	$tarballUrl = Get-ReleaseAssetUrl $version $tarballName
 
 	if (-not (Confirm-Install $version $tarballUrl)) {
 		Write-Host "Installation cancelled."
@@ -275,8 +317,8 @@ try {
 		$tarballPath = Join-Path $temporaryDirectory $tarballName
 
 		Write-Step "Downloading and verifying PiLoom v$version"
-		Invoke-SecureWebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS" -OutFile $checksumPath | Out-Null
-		Invoke-SecureWebRequest -Uri "$baseUrl/releases/v$version/SHA256SUMS.sig" -OutFile $signaturePath | Out-Null
+		Invoke-SecureWebRequest -Uri (Get-ReleaseAssetUrl $version "SHA256SUMS") -OutFile $checksumPath | Out-Null
+		Invoke-SecureWebRequest -Uri (Get-ReleaseAssetUrl $version "SHA256SUMS.sig") -OutFile $signaturePath | Out-Null
 		Verify-ReleaseSignature $checksumPath $signaturePath $version $releaseChannel
 		Invoke-SecureWebRequest -Uri $tarballUrl -OutFile $tarballPath | Out-Null
 		Verify-Checksum $checksumPath $tarballPath

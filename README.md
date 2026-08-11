@@ -82,9 +82,20 @@ npm.cmd run build
 node packages/coding-agent/dist/bundle/cli.js
 ```
 
-Published releases also include a native `install.ps1` installer. The release workflow renders its download host and publishes stable and beta variants alongside the POSIX installers. Both installers pin PiLoom's release public key and reject unsigned, cross-channel, or tampered checksum manifests. Release installers, tarballs, and Windows ZIPs also receive GitHub build-provenance attestations that can be checked with `gh attestation verify <artifact> --repo LiiLk/piloom`.
+Published releases also include native `install.ps1` and POSIX installers. Stable assets are downloaded from immutable version tags; beta assets are published through a recoverable transaction under the dedicated `beta` prerelease tag. The installers and `piloom update` pin PiLoom's release public key, follow only approved HTTPS GitHub release redirects, and reject unsigned, cross-channel, or tampered checksum manifests. Self-update installs only a verified local tarball, whose PiLoom workspace dependencies are bundled inside the authenticated archive. Release installers, tarballs, and Windows ZIPs also receive GitHub build-provenance attestations that can be checked with `gh attestation verify <artifact> --repo LiiLk/piloom`.
 
-For a trust bootstrap independent of the mutable R2 convenience URL, download `install.ps1` or `install.sh` from the versioned GitHub Release, verify its GitHub attestation, and only then execute it. The checksum signature protects an already-authenticated installer from a compromised download origin; it cannot make an installer fetched from that same compromised origin trustworthy.
+The public install paths are GitHub Release assets (no custom download domain is required):
+
+```powershell
+irm https://github.com/LiiLk/piloom/releases/latest/download/install.ps1 | iex
+```
+
+```bash
+gh release download --repo LiiLk/piloom --pattern install.sh --clobber
+sh install.sh
+```
+
+These convenience commands work after the first stable GitHub Release has been published. For beta, use `https://github.com/LiiLk/piloom/releases/download/beta/install-beta.sh`; on Windows use the matching `install-beta.ps1` asset with PowerShell. For a stronger trust bootstrap than piping a remote script directly into the shell, download the installer from the versioned GitHub Release, verify its GitHub attestation, and only then execute it.
 
 > [!WARNING]
 > PiLoom executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not a security sandbox**. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.

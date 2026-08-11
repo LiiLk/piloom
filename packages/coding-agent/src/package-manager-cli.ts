@@ -1,8 +1,9 @@
 import type { ImageContent, TextContent, UserMessage } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { spawn } from "child_process";
-import { readFileSync, rmSync, statSync } from "fs";
-import { resolve, sep } from "path";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve, sep } from "path";
 import { selectConfig } from "./cli/config-selector.js";
 import {
 	ensureInteractiveDaemonRunning,
@@ -35,7 +36,6 @@ import {
 	getDaemonUpdateRestartManifestPath,
 	getLegacyDaemonUpdateRestartManifestPath,
 	getSelfUpdateCommand,
-	getSelfUpdateUnavailableInstruction,
 	PACKAGE_NAME,
 	SELF_UPDATE_INTERACTIVE_CHILD_ENV,
 	SELF_UPDATE_NOT_ATTEMPTED_EXIT_CODE,
@@ -69,7 +69,13 @@ import {
 	DAEMON_WORKER_SUPERVISOR_SOCKET_ENV,
 } from "./modes/daemon/daemon-worker-protocol.js";
 import { prepareWindowsShellInvocation } from "./utils/child-process.js";
-import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.js";
+import {
+	downloadVerifiedReleaseTarball,
+	getLatestPiRelease,
+	isNewerPackageVersion,
+	type LatestPiRelease,
+	PRIME_AGENT_RELEASE_PACKAGE_NAME,
+} from "./utils/version-check.js";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
@@ -418,13 +424,9 @@ function reportDaemonUpdateRestartStatus(status: DaemonUpdateRestartStatus): voi
 	}
 }
 
-function printSelfUpdateUnavailable(
-	npmCommand?: string[],
-	updateSpec = PACKAGE_NAME,
-	updatePackageName = updateSpec,
-): void {
-	console.error(`error: ${APP_NAME} cannot self-update this installation.`);
-	console.error(getSelfUpdateUnavailableInstruction(PACKAGE_NAME, npmCommand, updateSpec, updatePackageName));
+function printSelfUpdateUnavailable(reason: string): void {
+	console.error(`error: ${APP_NAME} cannot self-update this installation: ${reason}`);
+	console.error("No package manager was invoked because the GitHub release could not be authenticated.");
 
 	const entrypoint = process.argv[1];
 	if (entrypoint) {
@@ -433,15 +435,18 @@ function printSelfUpdateUnavailable(
 	}
 }
 
-function printSelfUpdateFallback(command: SelfUpdateCommand): void {
-	console.error(chalk.dim(`If this keeps failing, run this command yourself: ${command.display}`));
+function printSelfUpdateFailure(): void {
+	console.error(
+		chalk.dim("The verified local package install failed; no remote package-manager fallback was attempted."),
+	);
 }
 
 interface SelfUpdatePlan {
-	installSpec: string;
 	packageName: string;
 	shouldRun: boolean;
 	targetVersion?: string;
+	release?: LatestPiRelease;
+	unavailableReason?: string;
 }
 
 function setSelfUpdateNoChangeExitCode(): void {
@@ -452,23 +457,50 @@ function setSelfUpdateNoChangeExitCode(): void {
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	try {
 		const latestRelease = await getLatestPiRelease(VERSION);
-		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
-		const installSpec = latestRelease?.installSpec ?? packageName;
-		const packageRenameRequiresUpdate = !latestRelease?.installSpec && packageName !== PACKAGE_NAME;
-		if (
-			force ||
-			!latestRelease ||
-			packageRenameRequiresUpdate ||
-			isNewerPackageVersion(latestRelease.version, VERSION)
-		) {
-			return { installSpec, packageName, shouldRun: true, targetVersion: latestRelease?.version };
+		if (!latestRelease) {
+			return {
+				packageName: PRIME_AGENT_RELEASE_PACKAGE_NAME,
+				shouldRun: true,
+				unavailableReason: "the GitHub release manifest is unavailable or invalid",
+			};
+		}
+		const packageName = PRIME_AGENT_RELEASE_PACKAGE_NAME;
+		if (!latestRelease.installSpec) {
+			return {
+				packageName,
+				shouldRun: true,
+				targetVersion: latestRelease.version,
+				unavailableReason: "the GitHub release manifest has no authenticated tarball",
+			};
+		}
+		const isNewerRelease = isNewerPackageVersion(latestRelease.version, VERSION);
+		const isCurrentRelease = latestRelease.version.trim().replace(/^v/, "") === VERSION.trim().replace(/^v/, "");
+		if (isNewerRelease || (force && isCurrentRelease)) {
+			return {
+				packageName,
+				shouldRun: true,
+				targetVersion: latestRelease.version,
+				release: latestRelease,
+			};
+		}
+		if (force && !isCurrentRelease) {
+			return {
+				packageName,
+				shouldRun: true,
+				targetVersion: latestRelease.version,
+				unavailableReason: `the signed release v${latestRelease.version} is older than installed v${VERSION}; downgrade refused`,
+			};
 		}
 	} catch {
-		return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: true };
+		return {
+			packageName: PRIME_AGENT_RELEASE_PACKAGE_NAME,
+			shouldRun: true,
+			unavailableReason: "the GitHub release could not be fetched or authenticated",
+		};
 	}
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { installSpec: PACKAGE_NAME, packageName: PACKAGE_NAME, shouldRun: false };
+	return { packageName: PRIME_AGENT_RELEASE_PACKAGE_NAME, shouldRun: false };
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -1612,61 +1644,74 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 						setSelfUpdateNoChangeExitCode();
 						return true;
 					}
-					const selfUpdateCommand = getSelfUpdateCommand(
-						PACKAGE_NAME,
-						selfUpdateNpmCommand,
-						selfUpdatePlan.installSpec,
-						selfUpdatePlan.packageName,
+					if (!selfUpdatePlan.release) {
+						printSelfUpdateUnavailable(selfUpdatePlan.unavailableReason ?? "the release manifest is not usable");
+						process.exitCode = 1;
+						return true;
+					}
+					const updateTempDirectory = mkdtempSync(join(tmpdir(), "piloom-self-update-"));
+					const localTarballPath = join(
+						updateTempDirectory,
+						`${PRIME_AGENT_RELEASE_PACKAGE_NAME}-${selfUpdatePlan.release.version}.tgz`,
 					);
-					if (!selfUpdateCommand) {
-						printSelfUpdateUnavailable(
+					try {
+						await downloadVerifiedReleaseTarball(selfUpdatePlan.release, localTarballPath, {
+							signal: AbortSignal.timeout(120_000),
+						});
+						const selfUpdateCommand = getSelfUpdateCommand(
+							PACKAGE_NAME,
 							selfUpdateNpmCommand,
-							selfUpdatePlan.installSpec,
+							localTarballPath,
 							selfUpdatePlan.packageName,
 						);
-						process.exitCode = 1;
-						return true;
-					}
-					// Confirm before the install, since upgrading the daemon afterward stops and resumes busy work.
-					const daemonSocketPath = resolveUpdateDaemonSocketPath(options.daemonSocketPath);
-					const daemonProbe = await probeRunningDaemonSessions(daemonSocketPath);
-					if (!(await confirmDaemonSessionLossBeforeUpdate(daemonProbe, options.force))) {
-						if (process.stdin.isTTY) {
-							console.log(chalk.dim("Update cancelled."));
+						if (!selfUpdateCommand) {
+							printSelfUpdateUnavailable(
+								"this installation is not managed by a writable global package manager",
+							);
+							process.exitCode = 1;
+							return true;
 						}
-						process.exitCode = 1;
-						return true;
-					}
-					try {
+						// Confirm before the install, since upgrading the daemon afterward stops and resumes busy work.
+						const daemonSocketPath = resolveUpdateDaemonSocketPath(options.daemonSocketPath);
+						const daemonProbe = await probeRunningDaemonSessions(daemonSocketPath);
+						if (!(await confirmDaemonSessionLossBeforeUpdate(daemonProbe, options.force))) {
+							if (process.stdin.isTTY) {
+								console.log(chalk.dim("Update cancelled."));
+							}
+							process.exitCode = 1;
+							return true;
+						}
 						await runSelfUpdate(selfUpdateCommand);
+						const versionChange = selfUpdatePlan.targetVersion
+							? ` from v${VERSION} to v${selfUpdatePlan.targetVersion}`
+							: "";
+						console.log(chalk.green(`Updated ${APP_NAME}${versionChange}`));
+						if (process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] === "1") {
+							return true;
+						}
+						try {
+							const status = await launchDaemonUpdateRestartCoordinator({
+								socketPath: daemonSocketPath,
+								agentDir,
+								cwd,
+								originActiveSessionId: process.env[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV],
+							});
+							reportDaemonUpdateRestartStatus(status);
+						} catch (error: unknown) {
+							console.error(
+								chalk.yellow(
+									`Warning: updated, but could not coordinate the daemon restart (${formatUnknownError(error)}).`,
+								),
+							);
+						}
 					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : "Unknown package command error";
+						const message = error instanceof Error ? error.message : "Unknown release verification error";
 						console.error(chalk.red(`Error: ${message}`));
-						printSelfUpdateFallback(selfUpdateCommand);
+						printSelfUpdateFailure();
 						process.exitCode = 1;
 						return true;
-					}
-					const versionChange = selfUpdatePlan.targetVersion
-						? ` from v${VERSION} to v${selfUpdatePlan.targetVersion}`
-						: "";
-					console.log(chalk.green(`Updated ${APP_NAME}${versionChange}`));
-					if (process.env[SELF_UPDATE_INTERACTIVE_CHILD_ENV] === "1") {
-						return true;
-					}
-					try {
-						const status = await launchDaemonUpdateRestartCoordinator({
-							socketPath: daemonSocketPath,
-							agentDir,
-							cwd,
-							originActiveSessionId: process.env[DAEMON_WORKER_ACTIVE_SESSION_ID_ENV],
-						});
-						reportDaemonUpdateRestartStatus(status);
-					} catch (error: unknown) {
-						console.error(
-							chalk.yellow(
-								`Warning: updated, but could not coordinate the daemon restart (${formatUnknownError(error)}).`,
-							),
-						);
+					} finally {
+						rmSync(updateTempDirectory, { recursive: true, force: true });
 					}
 				}
 				return true;
