@@ -54,6 +54,59 @@ function Assert-TrustedReleaseUri([Uri]$ParsedUri) {
 	}
 }
 
+function Invoke-WebRequestWithoutRedirect([Uri]$Uri, [string]$OutFile = "") {
+	$request = [System.Net.HttpWebRequest]::Create($Uri)
+	$request.AllowAutoRedirect = $false
+	$request.Method = "GET"
+	$request.UserAgent = "PiLoom-Installer"
+	$response = $null
+	try {
+		try {
+			$response = [System.Net.HttpWebResponse]$request.GetResponse()
+		} catch [System.Net.WebException] {
+			if (-not $_.Exception.Response) {
+				throw
+			}
+			$response = [System.Net.HttpWebResponse]$_.Exception.Response
+		}
+
+		$statusCode = [int]$response.StatusCode
+		$content = ""
+		if ($statusCode -ge 200 -and $statusCode -lt 300) {
+			$responseStream = $response.GetResponseStream()
+			try {
+				if ([string]::IsNullOrWhiteSpace($OutFile)) {
+					$reader = New-Object System.IO.StreamReader($responseStream, [System.Text.Encoding]::UTF8, $true)
+					try {
+						$content = $reader.ReadToEnd()
+					} finally {
+						$reader.Dispose()
+					}
+				} else {
+					$fileStream = New-Object System.IO.FileStream($OutFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+					try {
+						$responseStream.CopyTo($fileStream)
+					} finally {
+						$fileStream.Dispose()
+					}
+				}
+			} finally {
+				$responseStream.Dispose()
+			}
+		}
+
+		return [PSCustomObject]@{
+			StatusCode = $statusCode
+			Location = $response.Headers["Location"]
+			Content = $content
+		}
+	} finally {
+		if ($response) {
+			$response.Dispose()
+		}
+	}
+}
+
 function Invoke-SecureWebRequest([string]$Uri, [string]$OutFile = "") {
 	$parsedUri = $null
 	if (-not [Uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsedUri)) {
@@ -61,35 +114,18 @@ function Invoke-SecureWebRequest([string]$Uri, [string]$OutFile = "") {
 	}
 	Assert-TrustedReleaseUri $parsedUri
 	for ($redirectCount = 0; ; $redirectCount++) {
-		$request = @{
-			Uri = $parsedUri
-			UseBasicParsing = $true
-			MaximumRedirection = 0
-			ErrorAction = "Stop"
-		}
-		if (-not [string]::IsNullOrWhiteSpace($OutFile)) {
-			$request.OutFile = $OutFile
-		}
-		try {
-			$response = Invoke-WebRequest @request
-			$statusCode = [int]$response.StatusCode
-			if ($statusCode -lt 300 -or $statusCode -ge 400) {
-				return $response
-			}
-		} catch {
-			$response = $_.Exception.Response
-			if (-not $response) {
-				throw
-			}
-		}
+		$response = Invoke-WebRequestWithoutRedirect -Uri $parsedUri -OutFile $OutFile
 		$statusCode = [int]$response.StatusCode
+		if ($statusCode -ge 200 -and $statusCode -lt 300) {
+			return $response
+		}
 		if ($statusCode -lt 300 -or $statusCode -ge 400) {
 			throw "The GitHub release request failed with HTTP status $statusCode."
 		}
 		if ($redirectCount -ge 5) {
 			throw "Too many redirects while downloading a PiLoom release asset."
 		}
-		$location = $response.Headers["Location"]
+		$location = $response.Location
 		if ([string]::IsNullOrWhiteSpace($location)) {
 			throw "PiLoom release redirect did not include a Location header."
 		}
