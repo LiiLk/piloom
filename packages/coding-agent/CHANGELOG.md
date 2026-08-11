@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fixed beta publication aborting as soon as it created its draft candidate: GitHub cannot resolve a draft release by tag name, so the transaction now falls back to the release list, and it reports the failing command instead of only announcing a rollback.
 - Added project trust prompts and `--approve`/`--no-approve` controls that gate project-local settings, resources, instructions, and extensions.
 - Changed first-run TUI branding to PiLoom and replaced the automatic Prime Intellect login prompt with generic model selection.
 - Changed the public CLI command and standalone executable to `piloom`, with Windows installer PATH verification.

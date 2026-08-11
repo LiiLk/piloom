@@ -54,9 +54,35 @@ jq_cli() {
 	"$jq_bin" "$@"
 }
 
-release_view() {
+# A draft release has no git tag yet, so GitHub answers 404 when it is looked up
+# by tag name. This transaction deliberately parks releases as drafts (the
+# candidate, and the backup during cutover), so lookups fall back to the release
+# list, which does include drafts.
+draft_release_view() {
 	local tag="$1"
 	local response_path error_path
+	response_path=$(mktemp "$snapshot_dir/draft-view.XXXXXX.json")
+	error_path=$(mktemp "$snapshot_dir/draft-view.XXXXXX.err")
+	if ! gh_api "repos/${repo}/releases?per_page=100" \
+		--jq "[.[] | select(.tag_name == \"${tag}\")] | first // empty" >"$response_path" 2>"$error_path"; then
+		echo "Could not list GitHub releases to find ${tag}; refusing to mutate release state." >&2
+		cat "$error_path" >&2
+		rm -f "$response_path" "$error_path"
+		return 2
+	fi
+	# `--jq ... // empty` still prints a newline when nothing matches.
+	if [[ -z "$(tr -d '[:space:]' <"$response_path")" ]]; then
+		rm -f "$response_path" "$error_path"
+		return 1
+	fi
+	cat "$response_path"
+	rm -f "$response_path" "$error_path"
+	return 0
+}
+
+release_view() {
+	local tag="$1"
+	local response_path error_path status
 	response_path=$(mktemp "$snapshot_dir/release-view.XXXXXX.json")
 	error_path=$(mktemp "$snapshot_dir/release-view.XXXXXX.err")
 	if gh_api "repos/${repo}/releases/tags/${tag}" >"$response_path" 2>"$error_path"; then
@@ -66,7 +92,12 @@ release_view() {
 	fi
 	if grep -Eq '\(HTTP 404\)|^HTTP/[0-9.]+ 404([[:space:]]|$)' "$error_path"; then
 		rm -f "$response_path" "$error_path"
-		return 1
+		if draft_release_view "$tag"; then
+			return 0
+		else
+			status=$?
+		fi
+		return "$status"
 	fi
 	echo "Could not inspect GitHub release ${tag}; refusing to mutate release state." >&2
 	cat "$error_path" >&2
@@ -76,9 +107,16 @@ release_view() {
 
 release_id_for_tag() {
 	local tag="$1"
-	local json status
+	local json status id
 	if json=$(release_view "$tag"); then
-		printf '%s\n' "$json" | jq_cli -r '.id'
+		id=$(printf '%s\n' "$json" | jq_cli -r '.id')
+		# Never hand an empty id to a caller: it would turn a delete or patch
+		# into a request against the whole releases collection.
+		if [[ -z "$id" || "$id" == "null" ]]; then
+			echo "GitHub release ${tag} has no id; refusing to mutate release state." >&2
+			return 2
+		fi
+		printf '%s\n' "$id"
 		return 0
 	else
 		status=$?
@@ -331,6 +369,10 @@ on_exit() {
 	exit "$status"
 }
 trap on_exit EXIT
+# Without this, an unexpected failure only prints the rollback notice, which is
+# impossible to act on from a CI log. Reporting is all it does; the EXIT trap
+# still decides what to roll back.
+trap 'echo "beta publication error at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 for required_path in "$BETA_DIR" "$WINDOWS_DIR" "$INSTALLER_DIR"; do
 	test -d "$required_path"

@@ -154,11 +154,25 @@ if (refMatch) {
   process.exit(0);
 }
 
+// A draft release has no git tag yet, so GitHub cannot resolve it by tag name
+// and answers 404. Callers have to fall back to the release list, which does
+// include drafts.
+if (path === "releases" || path.startsWith("releases?")) {
+  if (method !== "GET") fail("unsupported releases list method: " + method);
+  const filter = option("--jq");
+  const wanted = /select\\(\\.tag_name == "([^"]+)"\\)/.exec(filter);
+  if (!wanted) fail("unsupported releases list jq expression: " + filter);
+  const release = releaseForTag(wanted[1]);
+  if (release) printJson(releaseJson(release));
+  process.exit(0);
+}
+
 const releaseTagMatch = path.match(/^releases\\/tags\\/(.+)$/);
 if (releaseTagMatch) {
   const releaseTag = releaseTagMatch[1];
   if (process.env.FAKE_GH_RELEASE_VIEW_ERROR === releaseTag) fail("gh: Service Unavailable (HTTP 503)");
   if (!releaseForTag(releaseTag)) notFound();
+  if (releaseForTag(releaseTag).isDraft) notFound();
   const release = releaseForTag(releaseTag);
   if (method !== "GET") fail("unsupported release tag method");
   if (args.includes("--jq")) process.stdout.write(String(release.id) + "\\n"); else printJson(releaseJson(release));
@@ -166,7 +180,7 @@ if (releaseTagMatch) {
 }
 
 const releaseMatch = path.match(/^releases\\/(.+)$/);
-if (!releaseMatch) fail("unsupported API path: " + path);
+if (!releaseMatch) fail("unsupported API path: " + path + " from " + JSON.stringify(args));
 const id = releaseMatch[1];
 const tag = Object.keys(state.releases).find((key) => String(state.releases[key].id) === id);
 if (!tag) fail("release id not found: " + id);
