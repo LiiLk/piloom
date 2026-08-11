@@ -66,6 +66,47 @@ jobs:
       - name: Check
         run: npm.cmd run check
 
+  install-smoke:
+    name: Global install smoke (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-latest
+            npm: npm
+          - name: Windows
+            runner: windows-latest
+            npm: npm.cmd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: ${{ matrix.npm }} ci
+
+      - name: Build
+        run: ${{ matrix.npm }} run build
+
+      # Packs the release tarball and installs it with `npm install --global`,
+      # the only layout that nests dependencies under the installed package.
+      - name: Install the release tarball globally
+        run: ${{ matrix.npm }} run check:global-install
+
   test:
     name: Test (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -184,17 +225,19 @@ jobs:
   build-check-test:
     name: build-check-test
     if: always()
-    needs: [build-check, build-check-windows, test, test-windows]
+    needs: [build-check, build-check-windows, install-smoke, test, test-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Verify CI results
         env:
           BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
           BUILD_CHECK_WINDOWS_RESULT: ${{ needs.build-check-windows.result }}
+          INSTALL_SMOKE_RESULT: ${{ needs.install-smoke.result }}
           TEST_RESULT: ${{ needs.test.result }}
           TEST_WINDOWS_RESULT: ${{ needs.test-windows.result }}
         run: |
           test "$BUILD_CHECK_RESULT" = success
           test "$BUILD_CHECK_WINDOWS_RESULT" = success
+          test "$INSTALL_SMOKE_RESULT" = success
           test "$TEST_RESULT" = success
           test "$TEST_WINDOWS_RESULT" = success

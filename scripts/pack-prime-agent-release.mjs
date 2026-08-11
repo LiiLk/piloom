@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	cpSync,
@@ -15,6 +14,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAIN_PACKAGE_DIR, resolveMainDependencies } from "./release-dependencies.mjs";
+import { runNpm } from "./run-npm.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutputDir = join(root, "packages", "coding-agent", "release");
@@ -269,7 +269,7 @@ function assertBundledMainPackage(stagingDir, packageJson, bundledDependencies) 
 	if (/releases\/download|\.tgz/i.test(packageJsonText)) {
 		throw new Error("Main release package must not contain internal tarball URLs.");
 	}
-	const preview = JSON.parse(run("npm", ["pack", stagingDir, "--dry-run", "--json"], root));
+	const preview = JSON.parse(runNpm(["pack", stagingDir, "--dry-run", "--json"], root));
 	const files = new Set((preview[0]?.files || []).map((entry) => entry.path));
 	for (const dependencyName of bundledDependencies) {
 		const packagePathPrefix = `node_modules/${dependencyName}/package.json`;
@@ -286,46 +286,6 @@ function assertBundledMainPackage(stagingDir, packageJson, bundledDependencies) 
 			);
 		}
 	}
-}
-
-const WINDOWS_SHELL_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
-
-function escapeWindowsShellValue(value, command) {
-	if (/[\0\r\n]/.test(value)) {
-		throw new Error("Windows command arguments cannot contain NUL or newline characters");
-	}
-	if (command) {
-		return value.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
-	}
-	const escaped = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1");
-	return `"${escaped}"`.replace(WINDOWS_SHELL_META_CHARACTERS, "^$1");
-}
-
-function run(command, args, cwd) {
-	const useWindowsShell = process.platform === "win32" && command === "npm";
-	const shellCommand = useWindowsShell
-		? [escapeWindowsShellValue("npm", true), ...args.map((argument) => escapeWindowsShellValue(argument, false))].join(
-				" ",
-			)
-		: undefined;
-	const invocationCommand = useWindowsShell ? (process.env.ComSpec ?? "cmd.exe") : command;
-	const invocationArgs = shellCommand ? ["/d", "/s", "/c", `"${shellCommand}"`] : args;
-	const result = spawnSync(invocationCommand, invocationArgs, {
-		cwd,
-		stdio: "pipe",
-		encoding: "utf8",
-		windowsVerbatimArguments: useWindowsShell,
-		windowsHide: useWindowsShell,
-	});
-
-	if (result.status !== 0) {
-		if (result.stdout) process.stdout.write(result.stdout);
-		if (result.stderr) process.stderr.write(result.stderr);
-		throw new Error(`${invocationCommand} ${args.join(" ")} failed with exit code ${result.status}`);
-	}
-
-	if (result.stderr) process.stderr.write(result.stderr);
-	return result.stdout.trim();
 }
 
 function sha256File(path) {
@@ -411,7 +371,7 @@ function main() {
 			);
 		}
 
-		const tarballName = run("npm", ["pack", stagingDir, "--pack-destination", artifactsDir, "--silent"], root)
+		const tarballName = runNpm(["pack", stagingDir, "--pack-destination", artifactsDir, "--silent"], root)
 			.split("\n")
 			.at(-1);
 		if (!tarballName) {
