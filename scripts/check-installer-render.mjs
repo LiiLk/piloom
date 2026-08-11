@@ -419,7 +419,7 @@ prime_agent_download_release_asset "${url}" "$1"
 	try {
 		const allowed = run("https://github.com/LiiLk/piloom/releases/download/beta/start", true, "allowed");
 		if (allowed.result.status === 0) {
-			check(readFileSync(allowed.outputPath, "utf-8") === "allowed redirect payload\\n", "POSIX allowed redirect did not follow the complete chain");
+			check(readFileSync(allowed.outputPath, "utf-8") === "allowed redirect payload\n", "POSIX allowed redirect did not follow the complete chain");
 		}
 		run("https://github.com/LiiLk/piloom/releases/download/beta/rejected", false, "untrusted");
 		run("https://github.com/LiiLk/piloom/releases/download/beta/downgrade", false, "downgrade");
