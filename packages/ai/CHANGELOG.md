@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Changed standard builds to compile the checked-in model catalog snapshot; refreshing live provider metadata now requires the explicit `npm run generate-models` command so CI and signed releases remain reproducible.
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05
