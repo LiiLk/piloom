@@ -440,6 +440,8 @@ function checkPowerShellRedirectBehavior(source) {
 	const quotePowerShell = (value) => value.replaceAll("'", "''");
 	const harness = `${source.slice(0, mainStart)}
 $script:responses = @{
+  'https://github.com/LiiLk/piloom/releases/latest/download/stable' = @{ Status = 302; Location = 'https://release-assets.githubusercontent.com/github-production-release-asset/stable'; Content = '' }
+  'https://release-assets.githubusercontent.com/github-production-release-asset/stable' = @{ Status = 200; Location = ''; Content = '0.7.2' }
   'https://github.com/LiiLk/piloom/releases/download/beta/start' = @{ Status = 302; Location = 'https://release-assets.githubusercontent.com/github-production-release-asset/middle'; Content = '' }
   'https://release-assets.githubusercontent.com/github-production-release-asset/middle' = @{ Status = 307; Location = 'https://objects.githubusercontent.com/github-production-release-asset/final'; Content = '' }
   'https://objects.githubusercontent.com/github-production-release-asset/final' = @{ Status = 200; Location = ''; Content = 'allowed redirect payload' }
@@ -450,19 +452,20 @@ for ($index = 0; $index -le 6; $index++) {
   $script:responses["https://release-assets.githubusercontent.com/github-production-release-asset/limit-$index"] = @{ Status = 302; Location = "https://release-assets.githubusercontent.com/github-production-release-asset/limit-$($index + 1)"; Content = '' }
 }
 $script:responses['https://release-assets.githubusercontent.com/github-production-release-asset/limit-7'] = @{ Status = 200; Location = ''; Content = 'too late' }
-function Invoke-WebRequest {
-  param([Uri]$Uri, [int]$MaximumRedirection, [switch]$UseBasicParsing, [string]$OutFile, [string]$ErrorAction)
-  if ($MaximumRedirection -ne 0) { throw 'redirect limit was not disabled' }
+function Invoke-WebRequestWithoutRedirect {
+  param([Uri]$Uri, [string]$OutFile)
   $response = $script:responses[$Uri.AbsoluteUri]
   if (-not $response) { throw "missing fake response for $($Uri.AbsoluteUri)" }
-  if ($OutFile -and $response.StatusCode -lt 300) { [System.IO.File]::WriteAllText($OutFile, $response.Content) }
-  [PSCustomObject]@{ StatusCode = $response.Status; Headers = @{ Location = $response.Location }; Content = $response.Content }
+  if ($OutFile -and $response.Status -ge 200 -and $response.Status -lt 300) { [System.IO.File]::WriteAllText($OutFile, $response.Content) }
+  [PSCustomObject]@{ StatusCode = $response.Status; Location = $response.Location; Content = $response.Content }
 }
 function Assert-ScenarioRejected([string]$Uri, [string]$Label) {
   try { Invoke-SecureWebRequest -Uri $Uri | Out-Null } catch { return }
   throw "PowerShell redirect policy accepted $Label."
 }
 $outPath = '${quotePowerShell(join(temporaryDirectory, "allowed.out"))}'
+$resolvedVersion = Resolve-Version
+if ($resolvedVersion -ne '0.7.2') { throw "PowerShell stable release resolution returned '$resolvedVersion'." }
 Invoke-SecureWebRequest -Uri 'https://github.com/LiiLk/piloom/releases/download/beta/start' -OutFile $outPath | Out-Null
 if ((Get-Content -LiteralPath $outPath -Raw) -ne 'allowed redirect payload') { throw 'PowerShell allowed redirect did not follow the complete chain.' }
 Assert-ScenarioRejected 'https://github.com/LiiLk/piloom/releases/download/beta/rejected' 'an untrusted host'
@@ -488,8 +491,9 @@ function checkPowerShellInstaller(source) {
 	check(source.includes('$baseUrl = "https://github.com/LiiLk/piloom"'), "PowerShell installer must use the PiLoom GitHub repository as its release base");
 	check(source.includes('$unconfiguredDefaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_" + "CHANNEL__"'), "PowerShell installer is missing the release channel sentinel");
 	check(source.includes('$defaultChannel = "__PRIME_AGENT_DEFAULT_RELEASE_CHANNEL__"'), "PowerShell installer is missing the default release channel placeholder");
-	check(source.includes("Invoke-WebRequest"), "PowerShell installer must use Invoke-WebRequest for downloads");
-	check(source.includes("MaximumRedirection = 0"), "PowerShell installer must reject download redirects");
+	check(source.includes("[System.Net.HttpWebRequest]::Create"), "PowerShell installer must use the Windows-compatible HTTP request API");
+	check(source.includes("AllowAutoRedirect = $false"), "PowerShell installer must inspect redirects before following them");
+	check(!source.includes("Invoke-WebRequest @request"), "PowerShell installer must not rely on broken PowerShell 5.1 zero-redirect handling");
 	check(source.includes("Assert-TrustedReleaseBaseUri"), "PowerShell installer must validate its exact GitHub release base URL");
 	check(source.includes("Assert-TrustedReleaseUri"), "PowerShell installer must enforce its GitHub release redirect policy");
 	check(source.includes("release-assets.githubusercontent.com"), "PowerShell installer must allow GitHub's release asset host");
