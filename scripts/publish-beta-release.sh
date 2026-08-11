@@ -468,15 +468,19 @@ if [[ "$old_release_exists" == 1 && -z "$old_tag_sha" ]]; then
 fi
 
 # Build the complete candidate while the current public release is untouched.
+# The id comes straight from the creation response: looking the draft up
+# afterwards raced with GitHub making it visible in the release list, and a
+# draft cannot be resolved by tag name at all.
 mutation_started=1
-gh_cli release create "$candidate_tag" \
-	--title "Beta (v${BETA_VERSION})" \
-	--target "$BUILD_COMMIT" \
-	--notes-file "$beta_notes_path" \
-	--prerelease \
-	--draft >/dev/null
-candidate_id=$(release_id_for_tag "$candidate_tag")
-if [[ -z "$candidate_id" ]]; then
+candidate_id=$(gh_api --method POST "repos/${repo}/releases" \
+	-f "tag_name=${candidate_tag}" \
+	-f "target_commitish=${BUILD_COMMIT}" \
+	-f "name=Beta (v${BETA_VERSION})" \
+	-f "body=$(cat "$beta_notes_path")" \
+	-F draft=true \
+	-F prerelease=true \
+	--jq '.id')
+if [[ -z "$candidate_id" || "$candidate_id" == "null" ]]; then
 	echo "Could not resolve the candidate release id." >&2
 	exit 1
 fi
