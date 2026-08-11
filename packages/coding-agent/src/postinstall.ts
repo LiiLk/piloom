@@ -28,6 +28,9 @@ try {
 		await ensureKernelPython();
 	}
 } catch (error) {
-	console.error(`prime-agent: postinstall setup failed: ${oneLine(errorMessage(error))}`);
-	process.exitCode = 1;
+	// This only warms up the search tools and the IPython runtime; both are
+	// bootstrapped again on first use. Failing here would abort an otherwise
+	// working `npm install --global` over a transient download error.
+	console.error(`prime-agent: postinstall setup failed, it will run again on first use.`);
+	console.error(`prime-agent: ${oneLine(errorMessage(error))}`);
 }

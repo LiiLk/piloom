@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed `npm install --global` of the release tarball leaving `koffi`, `chalk`, `marked`, `typebox`, and `undici` unextracted: bundled workspace packages no longer declare their own dependencies, so npm stops treating them as part of the bundle.
+- Changed the install-time warm-up of the search tools and the IPython runtime to warn instead of failing the installation, since both are bootstrapped again on first use.
 - Added project trust prompts and `--approve`/`--no-approve` controls that gate project-local settings, resources, instructions, and extensions.
 - Changed first-run TUI branding to PiLoom and replaced the automatic Prime Intellect login prompt with generic model selection.
 - Changed the public CLI command and standalone executable to `piloom`, with Windows installer PATH verification.

@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAIN_PACKAGE_DIR, resolveMainDependencies } from "./release-dependencies.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutputDir = join(root, "packages", "coding-agent", "release");
@@ -25,7 +26,7 @@ const releasePackages = [
 	{ packageDir: "ai", publicName: undefined, artifactName: "prime-agent-ai" },
 	{ packageDir: "tui", publicName: undefined, artifactName: "prime-agent-tui" },
 	{ packageDir: "agent", publicName: undefined, artifactName: "prime-agent-core" },
-	{ packageDir: "coding-agent", publicName: publicPackageName, artifactName: publicPackageName },
+	{ packageDir: MAIN_PACKAGE_DIR, publicName: publicPackageName, artifactName: publicPackageName },
 ];
 
 function parseArgs(args) {
@@ -163,19 +164,36 @@ function releaseScripts(sourceScripts) {
 	};
 }
 
-function createReleasePackageJson(
+// The main package declares everything its bundle needs, the bundled copies
+// declare nothing because they share its node_modules, and the standalone
+// artifacts keep their own dependencies. See scripts/release-dependencies.mjs.
+function releaseDependencyFields(
 	sourcePackage,
-	packageName,
 	releaseVersion,
-	internalPackageNames,
-	bundledDependencies = [],
+	{ isMainPackage, bundled, mainDependencies, internalPackageNames },
 ) {
+	if (isMainPackage) return mainDependencies;
+	if (bundled) return { dependencies: undefined, optionalDependencies: undefined };
+	return {
+		dependencies: copyDependencies(sourcePackage.dependencies, internalPackageNames, releaseVersion),
+		optionalDependencies: copyDependencies(sourcePackage.optionalDependencies, internalPackageNames, releaseVersion),
+	};
+}
+
+/**
+ * @param {object} options
+ * @param {string[]} [options.bundledDependencies] internal packages shipped inside the main tarball
+ * @param {object} [options.mainDependencies] dependency set the main package must declare
+ * @param {Set<string>} options.internalPackageNames
+ * @param {boolean} [options.bundled] true for the copies written into the main tarball's node_modules
+ */
+function createReleasePackageJson(sourcePackage, packageName, releaseVersion, options) {
+	const isMainPackage = packageName === publicPackageName;
 	const packageJson = {
 		...sourcePackage,
 		name: packageName,
 		version: releaseVersion,
-		dependencies: copyDependencies(sourcePackage.dependencies, internalPackageNames, releaseVersion),
-		optionalDependencies: copyDependencies(sourcePackage.optionalDependencies, internalPackageNames, releaseVersion),
+		...releaseDependencyFields(sourcePackage, releaseVersion, { ...options, isMainPackage }),
 		scripts: releaseScripts(sourcePackage.scripts),
 	};
 
@@ -183,8 +201,8 @@ function createReleasePackageJson(
 	delete packageJson.overrides;
 	delete packageJson.private;
 
-	if (packageName === publicPackageName) {
-		packageJson.bundledDependencies = bundledDependencies;
+	if (isMainPackage) {
+		packageJson.bundledDependencies = options.bundledDependencies;
 		packageJson.bin = {
 			[publicCommandName]: "dist/bundle/cli.js",
 		};
@@ -226,7 +244,7 @@ function copyBundledInternalPackages(
 	releaseVersion,
 ) {
 	for (const releasePackage of releasePackages) {
-		if (releasePackage.packageDir === "coding-agent") continue;
+		if (releasePackage.packageDir === MAIN_PACKAGE_DIR) continue;
 		const sourcePackage = sourcePackages.get(releasePackage.packageDir);
 		const sourceName = sourcePackageNames.get(releasePackage.packageDir);
 		const targetDir = join(mainStagingDir, "node_modules", ...sourceName.split("/"));
@@ -234,14 +252,9 @@ function copyBundledInternalPackages(
 			sourcePackage,
 			packageNames.get(releasePackage.packageDir),
 			releaseVersion,
-			internalPackageNames,
+			{ internalPackageNames, bundled: true },
 		);
-		assertPinnedInternalDependencies(bundledPackageJson, internalPackageNames);
-		copyPackageContents(
-			packagePath(releasePackage.packageDir),
-			targetDir,
-			bundledPackageJson,
-		);
+		copyPackageContents(packagePath(releasePackage.packageDir), targetDir, bundledPackageJson);
 	}
 }
 
@@ -262,6 +275,15 @@ function assertBundledMainPackage(stagingDir, packageJson, bundledDependencies) 
 		const packagePathPrefix = `node_modules/${dependencyName}/package.json`;
 		if (![...files].some((file) => file === packagePathPrefix || file === `package/${packagePathPrefix}`)) {
 			throw new Error(`Main release tarball is missing bundled dependency ${dependencyName}.`);
+		}
+		// npm skips extracting anything it considers part of a bundle, so a
+		// bundled package that declares its own dependencies makes npm create
+		// them as empty directories during a global install.
+		const bundledPackageJson = readJson(join(stagingDir, "node_modules", ...dependencyName.split("/"), "package.json"));
+		if (bundledPackageJson.dependencies || bundledPackageJson.optionalDependencies) {
+			throw new Error(
+				`Bundled dependency ${dependencyName} must not declare dependencies; they belong on ${packageJson.name}.`,
+			);
 		}
 	}
 }
@@ -320,7 +342,7 @@ function main() {
 			readJson(packageJsonPath(releasePackage.packageDir)),
 		]),
 	);
-	const cliPackage = sourcePackages.get("coding-agent");
+	const cliPackage = sourcePackages.get(MAIN_PACKAGE_DIR);
 	const releaseVersion = args.version || normalizeVersion(process.env.PRIME_AGENT_VERSION || cliPackage.version);
 
 	for (const releasePackage of releasePackages) {
@@ -343,10 +365,20 @@ function main() {
 		);
 	}
 
-	const bundledDependencies = releasePackages
-		.filter((releasePackage) => releasePackage.packageDir !== "coding-agent")
-		.map((releasePackage) => sourcePackageNames.get(releasePackage.packageDir));
+	const bundledPackageDirs = releasePackages
+		.map((releasePackage) => releasePackage.packageDir)
+		.filter((packageDir) => packageDir !== MAIN_PACKAGE_DIR);
+	const bundledDependencies = bundledPackageDirs.map((packageDir) => sourcePackageNames.get(packageDir));
 	const internalPackageNames = new Set(bundledDependencies);
+	const mainDependencies = resolveMainDependencies({
+		mainPackage: cliPackage,
+		bundledPackages: bundledPackageDirs.map((packageDir) => ({
+			packageDir,
+			packageJson: sourcePackages.get(packageDir),
+		})),
+		internalPackageNames,
+		releaseVersion,
+	});
 
 	const stagingRoot = join(args.outDir, "packages");
 	const artifactsDir = join(args.outDir, "artifacts");
@@ -360,17 +392,15 @@ function main() {
 		const sourcePackage = sourcePackages.get(releasePackage.packageDir);
 		const packageName = packageNames.get(releasePackage.packageDir);
 		const stagingDir = join(stagingRoot, releasePackage.packageDir);
-		const packageJson = createReleasePackageJson(
-			sourcePackage,
-			packageName,
-			releaseVersion,
+		const packageJson = createReleasePackageJson(sourcePackage, packageName, releaseVersion, {
+			bundledDependencies,
+			mainDependencies,
 			internalPackageNames,
-			releasePackage.packageDir === "coding-agent" ? bundledDependencies : [],
-		);
+		});
 		assertPinnedInternalDependencies(packageJson, internalPackageNames);
 
 		copyPackageContents(packagePath(releasePackage.packageDir), stagingDir, packageJson);
-		if (releasePackage.packageDir === "coding-agent") {
+		if (releasePackage.packageDir === MAIN_PACKAGE_DIR) {
 			copyBundledInternalPackages(
 				stagingDir,
 				sourcePackages,
@@ -392,7 +422,7 @@ function main() {
 		if (!existsSync(tarballPath) || !statSync(tarballPath).isFile()) {
 			throw new Error(`npm pack did not create ${tarballPath}`);
 		}
-		if (releasePackage.packageDir === "coding-agent") {
+		if (releasePackage.packageDir === MAIN_PACKAGE_DIR) {
 			assertBundledMainPackage(stagingDir, packageJson, bundledDependencies);
 		}
 
