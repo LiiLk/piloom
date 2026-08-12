@@ -108,6 +108,24 @@ piloom --offline
 }
 ```
 
+### Progress Guard
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `progressGuard.enabled` | boolean | `true` | Block repeated reads of the same unchanged file |
+| `progressGuard.maxRepeats` | number | `2` | Allowed reads of the same file contents before the next identical read is blocked |
+
+The guard only counts **reads** (`read_text`, `print_range`, `cat`, …). Mutations never block and clear the file's coverage: `await edit(...)`, `write_text`, the `edit` tool, `!edit --path`, `sed -i`, and shell redirects. Harness calls (`rlm`, `refine`, `agent_message`, `agent_observe`, `compact`) are ignored even if a prompt mentions a path. A new slice of the same file, or a rewrite, is not a repeat. This is a progress check, not a token budget.
+
+```json
+{
+  "progressGuard": {
+    "enabled": true,
+    "maxRepeats": 2
+  }
+}
+```
+
 ### Compaction
 
 | Setting | Type | Default | Description |

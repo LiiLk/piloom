@@ -218,6 +218,37 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("progressGuard", () => {
+		it("defaults to enabled with two unchanged-content repeats", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getProgressGuardSettings()).toEqual({
+				enabled: true,
+				maxRepeats: 2,
+			});
+		});
+
+		it("preserves explicit opt-out and valid maxRepeats", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ progressGuard: { enabled: false, maxRepeats: 4 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getProgressGuardSettings()).toEqual({
+				enabled: false,
+				maxRepeats: 4,
+			});
+		});
+
+		it("falls back to defaults for invalid maxRepeats", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ progressGuard: { maxRepeats: 0 } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getProgressGuardSettings().maxRepeats).toBe(2);
+		});
+	});
+
 	describe("autoRefine", () => {
 		it("defaults to enabled while preserving explicit opt-out", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

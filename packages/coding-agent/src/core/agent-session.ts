@@ -189,6 +189,7 @@ import {
 	isSessionSlashCommandMessage,
 } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import { createProgressGuard, type ProgressGuard } from "./progress-guard.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import {
@@ -1171,6 +1172,7 @@ export class AgentSession {
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
+	private readonly _progressGuard: ProgressGuard;
 	private _agentDir?: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
@@ -1291,6 +1293,10 @@ export class AgentSession {
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
+		this._progressGuard = createProgressGuard({
+			cwd: this._cwd,
+			settings: () => this.settingsManager.getProgressGuardSettings(),
+		});
 		this._agentDir = config.agentDir;
 		this._modelRegistry = config.modelRegistry;
 		this._extensionRunnerRef = config.extensionRunnerRef;
@@ -1420,6 +1426,11 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			const progressDecision = this._progressGuard.evaluate(toolCall.name, args);
+			if (progressDecision.block) {
+				return { block: true, reason: progressDecision.reason };
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -1443,6 +1454,10 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			if (!isError) {
+				this._progressGuard.record(toolCall.name, args);
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
 				return undefined;

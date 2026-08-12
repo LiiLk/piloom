@@ -72,6 +72,11 @@ export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
 
+export interface ProgressGuardSettings {
+	enabled?: boolean; // default: true
+	maxRepeats?: number; // default: 2 unchanged reads of the same file contents
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -163,6 +168,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	progressGuard?: ProgressGuardSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 }
 
@@ -922,6 +928,17 @@ export class SettingsManager {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+		};
+	}
+
+	getProgressGuardSettings(): { enabled: boolean; maxRepeats: number } {
+		const maxRepeats = this.settings.progressGuard?.maxRepeats;
+		return {
+			enabled: this.settings.progressGuard?.enabled ?? true,
+			maxRepeats:
+				typeof maxRepeats === "number" && Number.isFinite(maxRepeats) && maxRepeats >= 1
+					? Math.trunc(maxRepeats)
+					: 2,
 		};
 	}
 
